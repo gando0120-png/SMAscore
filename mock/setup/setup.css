@@ -1,0 +1,301 @@
+/* SMAScore Setup Mock — HTML / CSS only */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  min-height: 100%;
+  background: #0a0e14;
+}
+
+body {
+  min-height: 100dvh;
+  font-family: "Noto Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", "Meiryo", sans-serif;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+button,
+input {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  border: none;
+  background: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* ── レイアウト ── */
+
+.setup {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  max-width: 430px;
+  margin: 0 auto;
+  background: #121820;
+}
+
+.setup__header {
+  flex-shrink: 0;
+  padding: 20px 20px 16px;
+  padding-top: max(20px, env(safe-area-inset-top));
+  background: linear-gradient(180deg, #1a2332 0%, #121820 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.setup__title {
+  font-size: 22px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  line-height: 1.2;
+}
+
+.setup__subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.5);
+  line-height: 1.4;
+}
+
+.setup__form {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 16px 0;
+}
+
+/* ── フィールドグループ ── */
+
+.field-group {
+  margin-bottom: 24px;
+}
+
+.field-group__title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 12px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+.field__label {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.field__input {
+  width: 100%;
+  min-height: 48px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 500;
+  outline: none;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.field__input::placeholder {
+  color: rgba(255, 255, 255, 0.28);
+}
+
+.field__input:focus {
+  border-color: rgba(100, 181, 246, 0.6);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ── 試合形式 ── */
+
+.format-block {
+  padding: 14px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  margin-bottom: 10px;
+}
+
+.format-block:last-child {
+  margin-bottom: 0;
+}
+
+.format-block__label {
+  font-size: 13px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 10px;
+}
+
+/* ── 選択ボタン ── */
+
+.option-row {
+  display: flex;
+  gap: 8px;
+}
+
+.option-row--teams .option {
+  flex: 1;
+}
+
+.option {
+  flex: 1;
+  cursor: pointer;
+}
+
+.option__input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.option__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 18px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.75);
+  transition: background 0.12s, border-color 0.12s, color 0.12s, box-shadow 0.12s;
+}
+
+.option__input:checked + .option__btn {
+  background: rgba(100, 181, 246, 0.2);
+  border-color: rgba(100, 181, 246, 0.55);
+  color: #fff;
+  box-shadow: 0 0 16px rgba(100, 181, 246, 0.2);
+}
+
+.option__input:focus-visible + .option__btn {
+  outline: 2px solid rgba(100, 181, 246, 0.7);
+  outline-offset: 2px;
+}
+
+.option:active .option__btn {
+  transform: scale(0.98);
+}
+
+/* ── チーム名（チーム数に応じた表示・CSS only） ── */
+
+.team-fields {
+  display: flex;
+  flex-direction: column;
+}
+
+.team-field--3,
+.team-field--4 {
+  display: none;
+}
+
+.setup__form:has(#teams-3:checked) .team-field--3 {
+  display: flex;
+}
+
+.setup__form:has(#teams-4:checked) .team-field--3,
+.setup__form:has(#teams-4:checked) .team-field--4 {
+  display: flex;
+}
+
+/* ── 開始ボタン ── */
+
+.setup__footer {
+  margin-top: auto;
+  padding: 16px 0;
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+  position: sticky;
+  bottom: 0;
+  background: linear-gradient(180deg, transparent 0%, #121820 24%);
+}
+
+.start-btn {
+  width: 100%;
+  min-height: 56px;
+  border-radius: 12px;
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #fff;
+  background: linear-gradient(180deg, #43a047 0%, #2e7d32 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow:
+    0 3px 0 #1b5e20,
+    0 0 24px rgba(67, 160, 71, 0.25);
+}
+
+.start-btn:active {
+  transform: scale(0.99);
+  box-shadow:
+    0 1px 0 #1b5e20,
+    0 0 12px rgba(67, 160, 71, 0.15);
+}
+
+/* ── デスクトッププレビュー ── */
+
+@media (min-width: 431px) {
+  body {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    padding: 16px 0;
+  }
+
+  .setup {
+    min-height: calc(100dvh - 32px);
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+    overflow: hidden;
+  }
+}
+
+/* ── 小さい画面 ── */
+
+@media (max-height: 700px) {
+  .setup__header {
+    padding: 14px 16px 12px;
+  }
+
+  .setup__title {
+    font-size: 20px;
+  }
+
+  .field-group {
+    margin-bottom: 18px;
+  }
+
+  .option__btn {
+    min-height: 44px;
+    font-size: 16px;
+  }
+}

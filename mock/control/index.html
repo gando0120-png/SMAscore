@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>SMAScore — 操作画面</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="control.css">
+</head>
+<body>
+  <main class="control">
+
+    <div class="control__body">
+
+      <header class="header">
+        <button class="header__settings" type="button" aria-label="設定">
+          <svg class="header__settings-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.3-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.506.506 0 0 0 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1c-.23-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.23.09.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65z"/>
+          </svg>
+        </button>
+
+        <div class="header__meta">
+          <p class="header__tournament">第10回 全国モルック大会</p>
+          <p class="header__match">準決勝 A</p>
+          <div class="header__set">
+            <span class="header__set-label">SET</span>
+            <span class="header__set-score">
+              <span class="header__set-num header__set-num--left" id="setScoreLeft">2</span>
+              <span class="header__set-divider">-</span>
+              <span class="header__set-num header__set-num--right" id="setScoreRight">1</span>
+            </span>
+          </div>
+        </div>
+      </header>
+
+      <section class="team-board" id="teamBoard" aria-label="全チーム得点"></section>
+
+      <div class="input-team" id="inputTeamBanner" aria-label="現在入力チーム">
+        <span class="input-team__label">入力チーム</span>
+        <span class="input-team__name" id="teamName">チームさくら</span>
+      </div>
+
+      <section class="input-display" aria-label="現在入力">
+        <p class="input-display__label">現在入力</p>
+        <p class="input-display__value input-display__value--waiting" id="inputDisplay">入力待ち</p>
+      </section>
+
+      <section class="keypad" id="keypad" aria-label="得点入力">
+        <div class="keypad__grid">
+          <button class="key" type="button" data-value="1">1</button>
+          <button class="key" type="button" data-value="2">2</button>
+          <button class="key" type="button" data-value="3">3</button>
+          <button class="key" type="button" data-value="4">4</button>
+          <button class="key" type="button" data-value="5">5</button>
+          <button class="key" type="button" data-value="6">6</button>
+          <button class="key" type="button" data-value="7">7</button>
+          <button class="key" type="button" data-value="8">8</button>
+          <button class="key" type="button" data-value="9">9</button>
+          <button class="key" type="button" data-value="10">10</button>
+          <button class="key" type="button" data-value="11">11</button>
+          <button class="key" type="button" data-value="12">12</button>
+        </div>
+        <div class="keypad__row">
+          <button class="key" type="button" data-value="0">0</button>
+          <button class="key key--foul" type="button" data-value="F">F</button>
+        </div>
+      </section>
+
+    </div>
+
+    <footer class="actions" aria-label="操作">
+      <button class="action action--back" type="button" id="backBtn" disabled>戻る</button>
+      <button class="action action--confirm" type="button" id="confirmBtn" disabled>決定</button>
+      <button class="action action--confirm action--next-set" type="button" id="nextSetBtn" hidden>次セットへ</button>
+    </footer>
+
+  </main>
+  <script src="../shared/sync.js"></script>
+  <script src="control.js"></script>
+</body>
+</html>

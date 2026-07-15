@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>SMAScore — 試合設定</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="setup.css">
+</head>
+<body>
+  <main class="setup">
+
+    <header class="setup__header">
+      <h1 class="setup__title">試合設定</h1>
+      <p class="setup__subtitle">大会・試合情報を入力してください</p>
+    </header>
+
+    <form class="setup__form" action="#" method="get">
+
+      <!-- 大会名・試合名 -->
+      <section class="field-group">
+        <label class="field" for="tournament">
+          <span class="field__label">大会名</span>
+          <input class="field__input" type="text" id="tournament" name="tournament" placeholder="例：第10回 全国モルック大会">
+        </label>
+        <label class="field" for="match">
+          <span class="field__label">試合名</span>
+          <input class="field__input" type="text" id="match" name="match" placeholder="例：準決勝 A">
+        </label>
+      </section>
+
+      <!-- 試合形式 -->
+      <section class="field-group">
+        <h2 class="field-group__title">試合形式</h2>
+
+        <div class="format-block">
+          <p class="format-block__label">勝数先取</p>
+          <div class="option-row">
+            <label class="option">
+              <input class="option__input" type="radio" name="format" value="win-2" checked>
+              <span class="option__btn">2</span>
+            </label>
+            <label class="option">
+              <input class="option__input" type="radio" name="format" value="win-3">
+              <span class="option__btn">3</span>
+            </label>
+            <label class="option">
+              <input class="option__input" type="radio" name="format" value="win-4">
+              <span class="option__btn">4</span>
+            </label>
+            <label class="option">
+              <input class="option__input" type="radio" name="format" value="win-5">
+              <span class="option__btn">5</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="format-block">
+          <p class="format-block__label">ゲーム合計</p>
+          <div class="option-row">
+            <label class="option">
+              <input class="option__input" type="radio" name="format" value="game-2">
+              <span class="option__btn">2</span>
+            </label>
+            <label class="option">
+              <input class="option__input" type="radio" name="format" value="game-3">
+              <span class="option__btn">3</span>
+            </label>
+            <label class="option">
+              <input class="option__input" type="radio" name="format" value="game-4">
+              <span class="option__btn">4</span>
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <!-- チーム数 -->
+      <section class="field-group">
+        <h2 class="field-group__title">チーム数</h2>
+        <div class="option-row option-row--teams">
+          <label class="option">
+            <input class="option__input team-count" type="radio" name="teams" value="2" id="teams-2" checked>
+            <span class="option__btn">2</span>
+          </label>
+          <label class="option">
+            <input class="option__input team-count" type="radio" name="teams" value="3" id="teams-3">
+            <span class="option__btn">3</span>
+          </label>
+          <label class="option">
+            <input class="option__input team-count" type="radio" name="teams" value="4" id="teams-4">
+            <span class="option__btn">4</span>
+          </label>
+        </div>
+      </section>
+
+      <!-- チーム名 -->
+      <section class="field-group field-group--teams">
+        <h2 class="field-group__title">チーム名</h2>
+        <div class="team-fields">
+          <label class="field team-field team-field--1" for="team1">
+            <span class="field__label">チーム 1</span>
+            <input class="field__input" type="text" id="team1" name="team1" placeholder="チーム名を入力">
+          </label>
+          <label class="field team-field team-field--2" for="team2">
+            <span class="field__label">チーム 2</span>
+            <input class="field__input" type="text" id="team2" name="team2" placeholder="チーム名を入力">
+          </label>
+          <label class="field team-field team-field--3" for="team3">
+            <span class="field__label">チーム 3</span>
+            <input class="field__input" type="text" id="team3" name="team3" placeholder="チーム名を入力">
+          </label>
+          <label class="field team-field team-field--4" for="team4">
+            <span class="field__label">チーム 4</span>
+            <input class="field__input" type="text" id="team4" name="team4" placeholder="チーム名を入力">
+          </label>
+        </div>
+      </section>
+
+      <footer class="setup__footer">
+        <button class="start-btn" type="submit">開始</button>
+      </footer>
+
+    </form>
+  </main>
+</body>
+</html>
