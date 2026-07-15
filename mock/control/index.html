@@ -22,14 +22,14 @@
         </button>
 
         <div class="header__meta">
-          <p class="header__tournament">第10回 全国モルック大会</p>
-          <p class="header__match">準決勝 A</p>
+          <p class="header__tournament" id="tournamentName"></p>
+          <p class="header__match" id="matchName"></p>
           <div class="header__set">
             <span class="header__set-label">SET</span>
             <span class="header__set-score">
-              <span class="header__set-num header__set-num--left" id="setScoreLeft">2</span>
+              <span class="header__set-num header__set-num--left" id="setScoreLeft">0</span>
               <span class="header__set-divider">-</span>
-              <span class="header__set-num header__set-num--right" id="setScoreRight">1</span>
+              <span class="header__set-num header__set-num--right" id="setScoreRight">0</span>
             </span>
           </div>
         </div>
@@ -39,7 +39,7 @@
 
       <div class="input-team" id="inputTeamBanner" aria-label="現在入力チーム">
         <span class="input-team__label">入力チーム</span>
-        <span class="input-team__name" id="teamName">チームさくら</span>
+        <span class="input-team__name" id="teamName"></span>
       </div>
 
       <section class="input-display" aria-label="現在入力">
@@ -77,6 +77,7 @@
     </footer>
 
   </main>
+  <script src="../shared/matchConfig.js"></script>
   <script src="../shared/sync.js"></script>
   <script src="control.js"></script>
 </body>

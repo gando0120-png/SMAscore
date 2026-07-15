@@ -6,6 +6,8 @@
 (function () {
   const inputDisplay = document.getElementById("inputDisplay");
   const teamNameEl = document.getElementById("teamName");
+  const tournamentNameEl = document.getElementById("tournamentName");
+  const matchNameEl = document.getElementById("matchName");
   const inputTeamBanner = document.getElementById("inputTeamBanner");
   const teamBoardEl = document.getElementById("teamBoard");
   const keypadEl = document.getElementById("keypad");
@@ -16,15 +18,28 @@
   const setScoreRightEl = document.getElementById("setScoreRight");
   const keys = document.querySelectorAll(".key[data-value]");
 
+  const matchConfig = window.SMAScoreMatchConfig?.load();
+  if (!matchConfig) {
+    window.location.href = "../setup/";
+    return;
+  }
+
   const META = {
-    tournament: "第10回 全国モルック大会",
-    match: "準決勝 A",
+    tournament: matchConfig.tournament,
+    match: matchConfig.match,
+    format: matchConfig.format,
+    teamCount: matchConfig.teamCount,
   };
 
-  const teams = [
-    { name: "チームさくら", score: 42, total: 125, misses: 0, won: false, disqualified: false, setWins: 2 },
-    { name: "チームすずらん", score: 38, total: 118, misses: 1, won: false, disqualified: false, setWins: 1 },
-  ];
+  const teams = matchConfig.teamNames.map((name) => ({
+    name,
+    score: 0,
+    total: 0,
+    misses: 0,
+    won: false,
+    disqualified: false,
+    setWins: 0,
+  }));
 
   let activeTeamIndex = 0;
   let setStartTeamIndex = 0;
@@ -91,6 +106,11 @@
       setScoreLeftEl.textContent = teams[0].setWins;
       setScoreRightEl.textContent = teams[1].setWins;
     }
+  }
+
+  function renderMetaHeader() {
+    tournamentNameEl.textContent = META.tournament;
+    matchNameEl.textContent = META.match;
   }
 
   function renderTeamBoard() {
@@ -175,6 +195,8 @@
     return {
       tournament: META.tournament,
       match: META.match,
+      format: META.format,
+      teamCount: META.teamCount,
       teams: cloneTeams(),
       activeTeamIndex,
       setEnded,
@@ -190,6 +212,7 @@
   }
 
   function renderAll() {
+    renderMetaHeader();
     renderTeamBoard();
     renderSetHeader();
     renderInputTeamBanner();
@@ -247,29 +270,48 @@
     });
   }
 
+  function setWinnerAtFifty(winnerIndex) {
+    const winner = teams[winnerIndex];
+    winner.score = 50;
+    winner.won = true;
+  }
+
   function endSet(winnerIndex) {
     setEnded = true;
     setWinnerIndex = winnerIndex;
+    if (teams[winnerIndex].score === 50) {
+      teams[winnerIndex].won = true;
+    }
     addCurrentScoresToTotals();
     pendingSelection = null;
+  }
+
+  function endSetByDisqualification(winnerIndex) {
+    setWinnerAtFifty(winnerIndex);
+    endSet(winnerIndex);
+  }
+
+  function handleDisqualification(dqTeamIndex) {
+    if (teams.length === 2) {
+      const winnerIndex = 1 - dqTeamIndex;
+      endSetByDisqualification(winnerIndex);
+      return;
+    }
+
+    const remaining = getRemainingTeamIndices();
+    if (remaining.length === 1) {
+      endSetByDisqualification(remaining[0]);
+      return;
+    }
+
+    advanceTeam();
   }
 
   function resolveAfterThrow(teamIndex) {
     const team = teams[teamIndex];
 
     if (team.disqualified) {
-      if (teams.length === 2) {
-        endSet(1 - teamIndex);
-        return;
-      }
-
-      const remaining = getRemainingTeamIndices();
-      if (remaining.length === 1) {
-        endSet(remaining[0]);
-        return;
-      }
-
-      advanceTeam();
+      handleDisqualification(teamIndex);
       return;
     }
 
