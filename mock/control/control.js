@@ -609,10 +609,14 @@
     const ok = window.confirm("現在の試合データは終了します。新しい試合を作成しますか？");
     if (!ok) return;
 
-    try {
-      localStorage.removeItem("smascore-game-state");
-    } catch {
-      /* ignore */
+    if (window.SMAScoreSync?.clear) {
+      SMAScoreSync.clear();
+    } else {
+      try {
+        localStorage.removeItem("smascore-game-state");
+      } catch {
+        /* ignore */
+      }
     }
 
     window.location.href = "../setup/";
