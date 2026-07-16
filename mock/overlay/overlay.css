@@ -1,4 +1,4 @@
-/* SMAScore Overlay Mock — HTML / CSS only */
+/* SMAScore Overlay Mock — 2～4チーム対応 */
 
 *,
 *::before,
@@ -9,7 +9,6 @@
 }
 
 html {
-  /* ブラウザ確認用：OBS では透明背景のまま利用 */
   min-height: 100%;
   background:
     linear-gradient(160deg, #1c2838 0%, #0f1419 45%, #182030 100%);
@@ -30,12 +29,8 @@ body {
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
-  width: 90%;
-  max-width: 1100px;
-  height: 132px;
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: stretch;
+  width: 95%;
+  max-width: 1824px;
   background: rgba(0, 0, 0, 0.82);
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
@@ -46,9 +41,17 @@ body {
   isolation: isolate;
 }
 
-/* スポーツ中継風のアクセントライン */
-.overlay::before,
-.overlay::after {
+/* ── 2チーム：左右＋中央 ── */
+
+.overlay--2 {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: stretch;
+  height: 132px;
+}
+
+.overlay--2::before,
+.overlay--2::after {
   content: "";
   position: absolute;
   top: 0;
@@ -57,17 +60,58 @@ body {
   pointer-events: none;
 }
 
-.overlay::before {
+.overlay--2::before {
   left: 0;
   background: linear-gradient(180deg, #448aff 0%, #1565c0 100%);
 }
 
-.overlay::after {
+.overlay--2::after {
   right: 0;
   background: linear-gradient(180deg, #ff5252 0%, #c62828 100%);
 }
 
-/* ── チーム（左・右） ── */
+/* ── 3・4チーム：情報バー＋横一列 ── */
+
+.overlay--3,
+.overlay--4 {
+  display: flex;
+  flex-direction: column;
+  min-height: 120px;
+}
+
+.overlay__info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: clamp(8px, 1.2vw, 20px);
+  padding: 5px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  flex-shrink: 0;
+}
+
+.overlay--4 .overlay__info {
+  padding: 4px 12px;
+  gap: clamp(6px, 1vw, 14px);
+}
+
+.overlay__teams {
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+}
+
+.overlay--3 .overlay__teams {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.overlay--4 .overlay__teams {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+/* ── チーム共通 ── */
 
 .team {
   position: relative;
@@ -89,12 +133,30 @@ body {
   padding: 10px 24px 10px 20px;
 }
 
+.team--card {
+  align-items: center;
+  text-align: center;
+  padding: clamp(6px, 0.8vw, 10px) clamp(6px, 0.6vw, 12px);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.team--card:last-child {
+  border-right: none;
+}
+
 .team--active.team--left {
   background: linear-gradient(90deg, color-mix(in srgb, var(--team-color, #448aff) 18%, transparent) 0%, transparent 70%);
 }
 
 .team--active.team--right {
   background: linear-gradient(270deg, color-mix(in srgb, var(--team-color, #ff5252) 18%, transparent) 0%, transparent 70%);
+}
+
+.team--active.team--card {
+  background: color-mix(in srgb, var(--team-color) 14%, transparent);
+  box-shadow:
+    inset 0 0 0 2px var(--team-color),
+    0 0 20px color-mix(in srgb, var(--team-color) 35%, transparent);
 }
 
 .team--active .team__name {
@@ -107,7 +169,7 @@ body {
 }
 
 .team__name {
-  font-size: 14px;
+  font-size: clamp(10px, 1.1vw, 14px);
   font-weight: 700;
   letter-spacing: 0.06em;
   color: rgba(255, 255, 255, 0.88);
@@ -118,8 +180,16 @@ body {
   line-height: 1.3;
 }
 
+.overlay--3 .team__name {
+  font-size: clamp(10px, 1.05vw, 13px);
+}
+
+.overlay--4 .team__name {
+  font-size: clamp(9px, 0.85vw, 12px);
+}
+
 .team__score {
-  font-size: 56px;
+  font-size: clamp(36px, 4.5vw, 56px);
   font-weight: 900;
   line-height: 1;
   letter-spacing: -0.03em;
@@ -128,13 +198,21 @@ body {
   margin: 2px 0;
 }
 
+.overlay--3 .team__score {
+  font-size: clamp(40px, 4.8vw, 52px);
+}
+
+.overlay--4 .team__score {
+  font-size: clamp(32px, 3.6vw, 44px);
+}
+
 .team__score--victory {
   color: #ffca28;
   text-shadow: 0 0 16px rgba(255, 202, 40, 0.4);
 }
 
 .team__dq {
-  font-size: 10px;
+  font-size: clamp(8px, 0.7vw, 10px);
   font-weight: 900;
   color: #ff5252;
   letter-spacing: 0.06em;
@@ -143,20 +221,31 @@ body {
 .team__total {
   display: flex;
   align-items: baseline;
+  justify-content: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: clamp(10px, 1vw, 13px);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   color: rgba(255, 255, 255, 0.75);
   line-height: 1.2;
 }
 
+.team--left .team__total,
+.team--right .team__total {
+  justify-content: flex-start;
+}
+
 .team--right .team__total {
   flex-direction: row-reverse;
+  justify-content: flex-end;
+}
+
+.overlay--4 .team__total {
+  font-size: clamp(9px, 0.85vw, 11px);
 }
 
 .team__total-label {
-  font-size: 10px;
+  font-size: clamp(8px, 0.75vw, 10px);
   font-weight: 700;
   letter-spacing: 0.16em;
   color: rgba(255, 255, 255, 0.42);
@@ -164,15 +253,26 @@ body {
 
 .team__misses {
   display: flex;
-  gap: 7px;
+  justify-content: center;
+  gap: clamp(4px, 0.5vw, 7px);
   margin-top: 3px;
-  font-size: 15px;
+  font-size: clamp(11px, 1.1vw, 15px);
   line-height: 1;
   letter-spacing: 0;
 }
 
+.team--left .team__misses {
+  justify-content: flex-start;
+}
+
 .team--right .team__misses {
   flex-direction: row-reverse;
+  justify-content: flex-end;
+}
+
+.overlay--4 .team__misses {
+  font-size: clamp(10px, 0.95vw, 13px);
+  gap: 4px;
 }
 
 .miss {
@@ -190,7 +290,7 @@ body {
   text-shadow: 0 0 8px rgba(255, 82, 82, 0.45);
 }
 
-/* ── 中央 ── */
+/* ── 2チーム中央 ── */
 
 .center {
   display: flex;
@@ -248,24 +348,72 @@ body {
   color: rgba(255, 255, 255, 0.3);
 }
 
-.center__throw {
+/* ── 情報バー（3・4チーム / 共通ブロック） ── */
+
+.info__set {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1;
+}
+
+.info__set-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.info__set-score {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.info__set-num {
+  font-size: clamp(16px, 1.6vw, 22px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.info__set-num--0 { color: #82b1ff; }
+.info__set-num--1 { color: #ff8a80; }
+.info__set-num--2 { color: #81c784; }
+.info__set-num--3 { color: #ffd54f; }
+
+.info__set-divider {
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.28);
+}
+
+.info__throw,
+.center .info__throw {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.2;
+  max-width: min(180px, 22vw);
+}
+
+.center .info__throw {
   flex-direction: column;
   align-items: center;
   gap: 1px;
-  line-height: 1.2;
   max-width: 150px;
 }
 
-.center__throw-label {
+.info__throw-label {
   font-size: 9px;
   font-weight: 700;
   letter-spacing: 0.2em;
   color: rgba(255, 255, 255, 0.4);
+  flex-shrink: 0;
 }
 
-.center__throw-name {
-  font-size: 13px;
+.info__throw-name {
+  font-size: clamp(10px, 1vw, 13px);
   font-weight: 700;
   letter-spacing: 0.04em;
   color: rgba(255, 255, 255, 0.9);
@@ -275,30 +423,69 @@ body {
   max-width: 100%;
 }
 
-.center__waiting {
-  font-size: 11px;
+.info__waiting,
+.center .info__waiting {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: clamp(9px, 0.95vw, 11px);
   font-weight: 900;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.1em;
   color: #ffc107;
   background: rgba(255, 193, 7, 0.14);
   border: 1px solid rgba(255, 193, 7, 0.45);
   border-radius: 3px;
-  padding: 2px 12px;
+  padding: 2px 10px;
   line-height: 1.4;
+  flex-shrink: 0;
 }
 
-.center__waiting--set-end {
+.center .info__waiting {
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 12px;
+}
+
+.info__waiting--set-end,
+.center .info__waiting--set-end {
   color: #ffca28;
   background: rgba(255, 202, 40, 0.12);
   border-color: rgba(255, 202, 40, 0.45);
 }
 
-/* ── レスポンシブ ── */
+.waiting__status {
+  letter-spacing: 0.14em;
+}
 
-@media (max-width: 640px) {
+.waiting__value {
+  font-size: clamp(14px, 1.4vw, 18px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.waiting__value--foul {
+  color: #ff5252;
+}
+
+.waiting__winner {
+  font-size: clamp(11px, 1.1vw, 13px);
+  letter-spacing: 0.06em;
+  color: #fff;
+}
+
+.waiting__label {
+  letter-spacing: 0.14em;
+}
+
+/* ── 720p / 狭幅 ── */
+
+@media (max-width: 1280px) {
   .overlay {
-    height: 120px;
     bottom: 16px;
+  }
+
+  .overlay--2 {
+    height: 120px;
   }
 
   .team {
@@ -307,22 +494,6 @@ body {
 
   .team--right {
     padding: 8px 16px 8px 12px;
-  }
-
-  .team__name {
-    font-size: 11px;
-  }
-
-  .team__score {
-    font-size: 40px;
-  }
-
-  .team__total {
-    font-size: 11px;
-  }
-
-  .team__misses {
-    font-size: 12px;
   }
 
   .center {
@@ -335,11 +506,29 @@ body {
     font-size: 22px;
   }
 
-  .center__throw-name {
+  .overlay--3 .team__score {
+    font-size: clamp(34px, 4.2vw, 44px);
+  }
+
+  .overlay--4 .team__score {
+    font-size: clamp(28px, 3.2vw, 38px);
+  }
+}
+
+@media (max-width: 640px) {
+  .overlay--2 {
+    height: 110px;
+  }
+
+  .team__score {
+    font-size: 36px;
+  }
+
+  .info__throw-name {
     font-size: 10px;
   }
 
-  .center__waiting {
+  .info__waiting {
     font-size: 9px;
     padding: 2px 8px;
   }
