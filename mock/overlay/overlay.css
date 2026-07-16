@@ -22,16 +22,67 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ── オーバーレイ本体 ── */
+/* ── オーバーレイラッパー ── */
 
-.overlay {
+.overlay-wrap {
   position: fixed;
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
   width: 95%;
   max-width: 1824px;
-  background: rgba(0, 0, 0, 0.82);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.overlay__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 16px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, var(--overlay-bg-opacity, 0.82));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  text-align: center;
+  line-height: 1.3;
+}
+
+.overlay__meta[hidden] {
+  display: none;
+}
+
+.overlay__tournament {
+  font-size: clamp(11px, 1.1vw, 14px);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.overlay__match {
+  font-size: clamp(13px, 1.4vw, 17px);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ── オーバーレイ本体 ── */
+
+.overlay {
+  position: relative;
+  width: 100%;
+  background: rgba(0, 0, 0, var(--overlay-bg-opacity, 0.82));
   border: 1px solid rgba(255, 255, 255, 0.14);
   border-radius: 12px;
   box-shadow:
@@ -209,6 +260,24 @@ body {
 .team__score--victory {
   color: #ffca28;
   text-shadow: 0 0 16px rgba(255, 202, 40, 0.4);
+}
+
+@keyframes score-pulse {
+  0% {
+    transform: scale(1);
+  }
+
+  35% {
+    transform: scale(1.14);
+  }
+
+  100% {
+    transform: scale(1);
+  }
+}
+
+.team__score--animate {
+  animation: score-pulse 0.45s ease-out;
 }
 
 .team__dq {
@@ -480,7 +549,7 @@ body {
 /* ── 720p / 狭幅 ── */
 
 @media (max-width: 1280px) {
-  .overlay {
+  .overlay-wrap {
     bottom: 16px;
   }
 

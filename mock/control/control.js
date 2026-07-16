@@ -22,6 +22,20 @@
   const setScoreLeftEl = document.getElementById("setScoreLeft");
   const setScoreRightEl = document.getElementById("setScoreRight");
   const keys = document.querySelectorAll(".key[data-value]");
+  const settingsBtn = document.querySelector(".header__settings");
+  const controlEl = document.querySelector(".control");
+  const settingsModal = document.getElementById("settingsModal");
+  const settingsBackdrop = document.getElementById("settingsBackdrop");
+  const settingsCloseBtn = document.getElementById("settingsCloseBtn");
+  const settingsCancelBtn = document.getElementById("settingsCancelBtn");
+  const settingsForm = document.getElementById("settingsForm");
+  const settingsNewMatchBtn = document.getElementById("settingsNewMatchBtn");
+  const settingsTournamentInput = document.getElementById("settingsTournament");
+  const settingsMatchInput = document.getElementById("settingsMatch");
+  const settingsTeamNamesFieldset = document.getElementById("settingsTeamNames");
+  const settingsShowTournamentInput = document.getElementById("settingsShowTournament");
+  const settingsShowMatchInput = document.getElementById("settingsShowMatch");
+  const settingsScoreAnimationInput = document.getElementById("settingsScoreAnimation");
 
   const matchConfig = window.SMAScoreMatchConfig?.load();
   if (!matchConfig) {
@@ -57,6 +71,14 @@
   let editMode = false;
   let selectedEditIndex = null;
   let pendingEditSelection = null;
+  let settingsOpen = false;
+
+  let overlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
+    showTournament: true,
+    showMatch: true,
+    backgroundOpacity: "standard",
+    scoreAnimation: true,
+  };
 
   function cloneTeams() {
     return teams.map((team) => ({ ...team }));
@@ -470,20 +492,130 @@
     editModeBtn.textContent = editMode ? "通常モード" : "修正モード";
     historyPanel.hidden = !editMode;
 
-    const inputBlocked = setEnded || editMode;
+    const inputBlocked = setEnded || editMode || settingsOpen;
     keypadEl.classList.toggle("keypad--disabled", inputBlocked && !(editMode && selectedEditIndex !== null));
+
+    editModeBtn.disabled = settingsOpen;
 
     if (editMode) {
       nextSetBtn.hidden = true;
       confirmBtn.hidden = false;
-      confirmBtn.disabled = selectedEditIndex === null || pendingEditSelection === null;
+      confirmBtn.disabled = settingsOpen || selectedEditIndex === null || pendingEditSelection === null;
     } else {
       confirmBtn.hidden = setEnded;
-      confirmBtn.disabled = setEnded || pendingSelection === null;
+      confirmBtn.disabled = settingsOpen || setEnded || pendingSelection === null;
       nextSetBtn.hidden = !setEnded;
+      nextSetBtn.disabled = settingsOpen;
     }
 
-    backBtn.disabled = history.length === 0;
+    backBtn.disabled = history.length === 0 || settingsOpen;
+  }
+
+  function renderSettingsTeamFields() {
+    settingsTeamNamesFieldset.innerHTML = '<legend class="settings-fieldset__legend">チーム名</legend>';
+
+    teams.forEach((team, index) => {
+      const field = document.createElement("div");
+      field.className = "settings-field";
+      field.innerHTML = `
+        <label class="settings-field__label" for="settingsTeam${index}">チーム ${index + 1}</label>
+        <input class="settings-field__input" type="text" id="settingsTeam${index}" autocomplete="off">
+      `;
+      field.querySelector("input").value = team.name;
+      settingsTeamNamesFieldset.appendChild(field);
+    });
+  }
+
+  function populateSettingsForm() {
+    settingsTournamentInput.value = META.tournament;
+    settingsMatchInput.value = META.match;
+    renderSettingsTeamFields();
+    settingsShowTournamentInput.checked = overlaySettings.showTournament;
+    settingsShowMatchInput.checked = overlaySettings.showMatch;
+    settingsScoreAnimationInput.checked = overlaySettings.scoreAnimation;
+
+    settingsForm
+      .querySelectorAll('input[name="backgroundOpacity"]')
+      .forEach((input) => {
+        input.checked = input.value === overlaySettings.backgroundOpacity;
+      });
+  }
+
+  function openSettings() {
+    settingsOpen = true;
+    populateSettingsForm();
+    settingsModal.hidden = false;
+    controlEl.classList.add("control--settings-open");
+    renderControls();
+  }
+
+  function closeSettings() {
+    settingsOpen = false;
+    settingsModal.hidden = true;
+    controlEl.classList.remove("control--settings-open");
+    renderControls();
+  }
+
+  function readSettingsForm() {
+    const backgroundOpacity =
+      settingsForm.querySelector('input[name="backgroundOpacity"]:checked')?.value ?? "standard";
+
+    const teamNames = teams.map((_, index) => {
+      const input = document.getElementById(`settingsTeam${index}`);
+      const value = input?.value.trim();
+      return value || `チーム ${index + 1}`;
+    });
+
+    return {
+      tournament: settingsTournamentInput.value.trim(),
+      match: settingsMatchInput.value.trim(),
+      teamNames,
+      overlaySettings: {
+        showTournament: settingsShowTournamentInput.checked,
+        showMatch: settingsShowMatchInput.checked,
+        backgroundOpacity,
+        scoreAnimation: settingsScoreAnimationInput.checked,
+      },
+    };
+  }
+
+  function saveSettings(event) {
+    event.preventDefault();
+
+    const data = readSettingsForm();
+
+    META.tournament = data.tournament;
+    META.match = data.match;
+    data.teamNames.forEach((name, index) => {
+      teams[index].name = name;
+    });
+
+    overlaySettings = data.overlaySettings;
+    window.SMAScoreOverlaySettings?.save(overlaySettings);
+
+    window.SMAScoreMatchConfig?.save({
+      tournament: META.tournament,
+      match: META.match,
+      format: META.format,
+      teamCount: META.teamCount,
+      teamNames: teams.map((team) => team.name),
+    });
+
+    closeSettings();
+    renderAll();
+  }
+
+  function confirmNewMatch() {
+    const ok = window.confirm("現在の試合データは終了します。新しい試合を作成しますか？");
+    if (!ok) return;
+
+    try {
+      localStorage.removeItem("smascore-game-state");
+    } catch {
+      /* ignore */
+    }
+
+    window.location.href = "../setup/";
   }
 
   function buildSyncState() {
@@ -497,6 +629,7 @@
       setEnded,
       setWinnerIndex,
       pendingSelection: editMode ? pendingEditSelection : pendingSelection,
+      overlaySettings,
     };
   }
 
@@ -518,6 +651,8 @@
   }
 
   function selectValue(value) {
+    if (settingsOpen) return;
+
     if (editMode) {
       if (selectedEditIndex === null) return;
       pendingEditSelection = value;
@@ -598,6 +733,8 @@
   }
 
   function toggleEditMode() {
+    if (settingsOpen) return;
+
     editMode = !editMode;
     selectedEditIndex = null;
     pendingEditSelection = null;
@@ -617,6 +754,13 @@
   backBtn.addEventListener("click", back);
   nextSetBtn.addEventListener("click", nextSet);
   editModeBtn.addEventListener("click", toggleEditMode);
+
+  settingsBtn.addEventListener("click", openSettings);
+  settingsCloseBtn.addEventListener("click", closeSettings);
+  settingsCancelBtn.addEventListener("click", closeSettings);
+  settingsBackdrop.addEventListener("click", closeSettings);
+  settingsForm.addEventListener("submit", saveSettings);
+  settingsNewMatchBtn.addEventListener("click", confirmNewMatch);
 
   renderAll();
 })();

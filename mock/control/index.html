@@ -89,7 +89,80 @@
     </footer>
 
   </main>
+
+  <div class="settings-modal" id="settingsModal" hidden role="dialog" aria-labelledby="settingsTitle" aria-modal="true">
+    <div class="settings-modal__backdrop" id="settingsBackdrop"></div>
+    <div class="settings-modal__panel">
+      <header class="settings-modal__header">
+        <h2 class="settings-modal__title" id="settingsTitle">試合中設定</h2>
+        <button class="settings-modal__close" type="button" id="settingsCloseBtn" aria-label="閉じる">×</button>
+      </header>
+
+      <form class="settings-modal__form" id="settingsForm">
+        <p class="settings-modal__notice">試合形式とチーム数を変更する場合は、新しい試合を作成してください。</p>
+
+        <div class="settings-field">
+          <label class="settings-field__label" for="settingsTournament">大会名</label>
+          <input class="settings-field__input" type="text" id="settingsTournament" autocomplete="off">
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-field__label" for="settingsMatch">試合名</label>
+          <input class="settings-field__input" type="text" id="settingsMatch" autocomplete="off">
+        </div>
+
+        <fieldset class="settings-fieldset" id="settingsTeamNames">
+          <legend class="settings-fieldset__legend">チーム名</legend>
+        </fieldset>
+
+        <fieldset class="settings-fieldset">
+          <legend class="settings-fieldset__legend">Overlay 表示</legend>
+          <label class="settings-check">
+            <input type="checkbox" id="settingsShowTournament">
+            <span>大会名を表示</span>
+          </label>
+          <label class="settings-check">
+            <input type="checkbox" id="settingsShowMatch">
+            <span>試合名を表示</span>
+          </label>
+        </fieldset>
+
+        <fieldset class="settings-fieldset">
+          <legend class="settings-fieldset__legend">背景透明度</legend>
+          <div class="settings-radio-group">
+            <label class="settings-radio">
+              <input type="radio" name="backgroundOpacity" value="low">
+              <span>低い</span>
+            </label>
+            <label class="settings-radio">
+              <input type="radio" name="backgroundOpacity" value="standard" checked>
+              <span>標準</span>
+            </label>
+            <label class="settings-radio">
+              <input type="radio" name="backgroundOpacity" value="high">
+              <span>高い</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <label class="settings-check settings-check--block">
+          <input type="checkbox" id="settingsScoreAnimation" checked>
+          <span>得点更新アニメーション</span>
+        </label>
+
+        <div class="settings-modal__actions">
+          <button class="settings-btn settings-btn--danger" type="button" id="settingsNewMatchBtn">新しい試合を作成</button>
+          <div class="settings-modal__actions-row">
+            <button class="settings-btn settings-btn--ghost" type="button" id="settingsCancelBtn">キャンセル</button>
+            <button class="settings-btn settings-btn--save" type="submit" id="settingsSaveBtn">保存</button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="../shared/matchConfig.js"></script>
+  <script src="../shared/overlaySettings.js"></script>
   <script src="../shared/sync.js"></script>
   <script src="control.js"></script>
 </body>
