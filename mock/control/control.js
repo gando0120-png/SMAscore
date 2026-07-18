@@ -79,6 +79,7 @@
   let settingsOpen = false;
   let isApplyingRemote = false;
   let suppressPublish = true;
+  let pendingPublish = false;
   let localRevision = 0;
 
   let overlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
@@ -866,11 +867,18 @@
   }
 
   function publishSync() {
-    if (isApplyingRemote || suppressPublish || !window.SMAScoreSync) return;
+    if (isApplyingRemote || !window.SMAScoreSync) return;
+    if (suppressPublish) {
+      pendingPublish = true;
+      return;
+    }
+    pendingPublish = false;
+    publishSyncWithRetry(buildSyncState(), localRevision, 3);
+  }
 
-    const baseRevision = localRevision;
-    const state = buildSyncState();
-    localRevision = baseRevision + 1;
+  function publishSyncWithRetry(state, baseRevision, attemptsLeft) {
+    const pendingRevision = baseRevision + 1;
+    localRevision = pendingRevision;
 
     SMAScoreSync.publish(state, { baseRevision }).then((result) => {
       if (result?.committed && result.data) {
@@ -879,8 +887,18 @@
       }
 
       if (result?.conflict && result.remote) {
-        applySyncState(result.remote);
-        return;
+        const remoteRevision = SMAScoreSync.getRevision(result.remote);
+        if (attemptsLeft > 0 && remoteRevision >= pendingRevision) {
+          // より新しい remote がある場合は、現行メモリ状態を新しい base で再送
+          publishSyncWithRetry(buildSyncState(), remoteRevision, attemptsLeft - 1);
+          return;
+        }
+
+        if (remoteRevision > baseRevision) {
+          localRevision = Math.max(0, remoteRevision - 1);
+          applySyncState(result.remote);
+          return;
+        }
       }
 
       localRevision = baseRevision;
@@ -1113,6 +1131,9 @@
     }
 
     suppressPublish = false;
+    if (pendingPublish) {
+      publishSync();
+    }
   }
 
   bootstrap();

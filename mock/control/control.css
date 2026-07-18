@@ -59,6 +59,9 @@ button {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding-bottom: calc(var(--footer-h) + var(--gap-sm) + env(safe-area-inset-bottom));
 }
 

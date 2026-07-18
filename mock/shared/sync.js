@@ -158,10 +158,14 @@
       }
 
       if (result.conflict && result.remote) {
-        lastDeliveredRevision = getRevision(result.remote);
-        publishLocal(result.remote);
+        const remoteRevision = getRevision(result.remote);
+        // ローカルに既に新しい revision を載せている場合、古い remote で上書きしない
+        if (remoteRevision >= pendingRevision) {
+          lastDeliveredRevision = remoteRevision;
+          publishLocal(result.remote);
+        }
       } else if (!result.committed) {
-        lastDeliveredRevision = baseRevision;
+        lastDeliveredRevision = Math.max(baseRevision, getRevision(readStored()));
       }
 
       return result;

@@ -113,12 +113,54 @@ async function openControl(browser, teamNames, options = {}) {
   await page.goto(`http://127.0.0.1:${PORT}/control/?room=${room}`, {
     waitUntil: "networkidle0",
   });
+  await page.evaluate(() => {
+    window.confirm = () => true;
+  });
   await page.waitForSelector("#teamBoard .team-card");
+  await page.waitForSelector("#throwOrderList .throw-order__row");
   await page.waitForFunction(() => {
     const sync = window.SMAScoreSync;
-    return sync && sync.read() && sync.read().teams;
+    return sync && sync.read() && sync.read().teams && Array.isArray(sync.read().throwOrder);
   });
+  // bootstrap 完了（suppressPublish 解除）を待つ
+  await page.waitForFunction(() => {
+    const state = window.SMAScoreSync.read();
+    return state && typeof state.revision === "number" && state.revision > 0;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 400));
   return page;
+}
+
+async function waitForThrowOrder(page, expected) {
+  const expectedJson = JSON.stringify(expected);
+  await page.waitForFunction(
+    (json) => {
+      const state = window.SMAScoreSync?.read();
+      return state && JSON.stringify(state.throwOrder) === json;
+    },
+    { timeout: 10000 },
+    expectedJson
+  );
+}
+
+async function reorderTeam(page, teamIndex, action) {
+  await page.evaluate(() => {
+    window.confirm = () => true;
+  });
+  // フッターに隠れる場合があるため DOM click を使う
+  await page.evaluate(
+    ({ teamIndex, action }) => {
+      const btn = document.querySelector(
+        `.throw-order__row[data-team-index="${teamIndex}"] [data-action="${action}"]`
+      );
+      if (!btn || btn.disabled) {
+        throw new Error(`throw-order button unavailable: team=${teamIndex} action=${action}`);
+      }
+      btn.scrollIntoView({ block: "center" });
+      btn.click();
+    },
+    { teamIndex, action }
+  );
 }
 
 async function openOverlay(browser) {
@@ -161,19 +203,21 @@ async function run() {
     // 2) 2 teams B→A via reorder
     {
       const control = await openControl(browser, ["A", "B"]);
-      await control.click('.throw-order__row[data-team-index="1"] [data-action="front"]');
-      await control.waitForFunction(() => {
-        const names = [...document.querySelectorAll("#teamBoard .team-card__name")].map((el) =>
-          el.textContent.trim()
-        );
-        return names.join("|") === "B|A";
-      });
+      await reorderTeam(control, 1, "front");
+      await waitForThrowOrder(control, [1, 0]);
       const state = await control.evaluate(() => window.SMAScoreSync.read());
-      assert(JSON.stringify(state.throwOrder) === "[1,0]", `2 throwOrder ${state.throwOrder}`);
       assert(state.activeTeamIndex === 1, "2 active");
+      const names = await control.$$eval("#teamBoard .team-card__name", (els) =>
+        els.map((el) => el.textContent.trim())
+      );
+      assert(names.join("|") === "B|A", `2 names ${names}`);
       results.push("2. 2チーム B→A OK");
 
       const overlay = await openOverlay(browser);
+      await overlay.waitForFunction(() => {
+        const state = window.SMAScoreSync?.read();
+        return state && JSON.stringify(state.throwOrder) === "[1,0]";
+      });
       const overlayNames = await overlay.$$eval("#overlayRoot .team__name", (els) =>
         els.map((el) => el.textContent.replace(/失格/g, "").trim())
       );
@@ -207,14 +251,10 @@ async function run() {
     // 4) 3 teams C→A→B
     {
       const control = await openControl(browser, ["A", "B", "C"]);
-      await control.click('.throw-order__row[data-team-index="2"] [data-action="front"]');
-      await control.waitForFunction(() => {
-        const names = [...document.querySelectorAll("#teamBoard .team-card__name")].map((el) =>
-          el.textContent.trim()
-        );
-        return names.join("|") === "C|A|B";
-      });
+      await reorderTeam(control, 2, "front");
+      await waitForThrowOrder(control, [2, 0, 1]);
       const overlay = await openOverlay(browser);
+      await overlay.waitForFunction(() => JSON.stringify(window.SMAScoreSync.read()?.throwOrder) === "[2,0,1]");
       const overlayNames = await overlay.$$eval("#overlayRoot .team__name", (els) =>
         els.map((el) => el.textContent.replace(/失格/g, "").trim())
       );
@@ -227,16 +267,12 @@ async function run() {
     // 5) 4 teams D→A→B→C
     {
       const control = await openControl(browser, ["A", "B", "C", "D"]);
-      await control.click('.throw-order__row[data-team-index="3"] [data-action="front"]');
-      await control.waitForFunction(() => {
-        const names = [...document.querySelectorAll("#teamBoard .team-card__name")].map((el) =>
-          el.textContent.trim()
-        );
-        return names.join("|") === "D|A|B|C";
-      });
+      await reorderTeam(control, 3, "front");
+      await waitForThrowOrder(control, [3, 0, 1, 2]);
       const setItems = await control.$$eval("#setScore .header__set-item", (els) => els.length);
       assert(setItems === 4, `5 set items ${setItems}`);
       const overlay = await openOverlay(browser);
+      await overlay.waitForFunction(() => JSON.stringify(window.SMAScoreSync.read()?.throwOrder) === "[3,0,1,2]");
       const setNums = await overlay.$$eval(".info__set-num", (els) => els.length);
       assert(setNums === 4, `5 overlay sets ${setNums}`);
       results.push("5. 4チーム D→A→B→C OK");
@@ -247,10 +283,12 @@ async function run() {
     // 6-7) manual order + score to correct team
     {
       const control = await openControl(browser, ["A", "B", "C"]);
-      await control.click('.throw-order__row[data-team-index="2"] [data-action="front"]');
-      await control.waitForFunction(() => window.SMAScoreSync.read().throwOrder[0] === 2);
-      await control.click('.key[data-value="9"]');
-      await control.click("#confirmBtn");
+      await reorderTeam(control, 2, "front");
+      await waitForThrowOrder(control, [2, 0, 1]);
+      await control.evaluate(() => {
+        document.querySelector('.key[data-value="9"]').click();
+        document.getElementById("confirmBtn").click();
+      });
       await control.waitForFunction(() => {
         const state = window.SMAScoreSync.read();
         return state.teams[2].score === 9 && state.activeTeamIndex === 0;
@@ -264,14 +302,14 @@ async function run() {
     // 8) reload persistence
     {
       const control = await openControl(browser, ["A", "B", "C"]);
-      await control.click('.throw-order__row[data-team-index="2"] [data-action="front"]');
-      await control.waitForFunction(() => window.SMAScoreSync.read().throwOrder[0] === 2);
+      await reorderTeam(control, 2, "front");
+      await waitForThrowOrder(control, [2, 0, 1]);
       await control.reload({ waitUntil: "networkidle0" });
+      await control.evaluate(() => {
+        window.confirm = () => true;
+      });
       await control.waitForSelector("#teamBoard .team-card");
-      await control.waitForFunction(() => {
-        const state = window.SMAScoreSync.read();
-        return state && JSON.stringify(state.throwOrder) === "[2,0,1]";
-      }, { timeout: 10000 });
+      await waitForThrowOrder(control, [2, 0, 1]);
       const names = await control.$$eval("#teamBoard .team-card__name", (els) =>
         els.map((el) => el.textContent.trim())
       );
@@ -284,13 +322,10 @@ async function run() {
     {
       const control = await openControl(browser, ["A", "B", "C"]);
       const room = ROOM;
-      await control.click('.throw-order__row[data-team-index="1"] [data-action="front"]');
-      await control.waitForFunction(() => JSON.stringify(window.SMAScoreSync.read().throwOrder) === "[1,0,2]");
+      await reorderTeam(control, 1, "front");
+      await waitForThrowOrder(control, [1, 0, 2]);
       const other = await openControl(browser, ["A", "B", "C"], { room, reuseState: true });
-      await other.waitForFunction(() => {
-        const state = window.SMAScoreSync.read();
-        return state && JSON.stringify(state.throwOrder) === "[1,0,2]";
-      }, { timeout: 10000 });
+      await waitForThrowOrder(other, [1, 0, 2]);
       results.push("9. 別端末(別タブ)同じ順番 OK");
       await other.close();
       await control.close();
@@ -299,8 +334,8 @@ async function run() {
     // 10) set rotation (C first → after next set A first)
     {
       const control = await openControl(browser, ["A", "B", "C"]);
-      await control.click('.throw-order__row[data-team-index="2"] [data-action="front"]');
-      await control.waitForFunction(() => JSON.stringify(window.SMAScoreSync.read().throwOrder) === "[2,0,1]");
+      await reorderTeam(control, 2, "front");
+      await waitForThrowOrder(control, [2, 0, 1]);
 
       for (let guard = 0; guard < 40; guard += 1) {
         const status = await control.evaluate(() => {
@@ -309,29 +344,32 @@ async function run() {
             ended: !!state.setEnded,
             active: state.activeTeamIndex,
             score: state.teams[2].score,
+            revision: state.revision,
           };
         });
         if (status.ended) break;
 
-        let value = "0";
+        // 他チームはミス連打で失格しないよう 1 点を入れる
+        let value = "1";
         if (status.active === 2) {
           const need = 50 - status.score;
           value = String(Math.min(12, need));
         }
-        await control.click(`.key[data-value="${value}"]`);
-        await control.click("#confirmBtn");
+
+        await control.evaluate((v) => {
+          const key = document.querySelector(`.key[data-value="${v}"]`);
+          const confirm = document.getElementById("confirmBtn");
+          key.click();
+          confirm.click();
+        }, value);
+
         await control.waitForFunction(
-          (prevActive, prevScore, prevEnded) => {
+          (prevRevision, prevEnded) => {
             const state = window.SMAScoreSync.read();
-            return (
-              state.setEnded !== prevEnded ||
-              state.activeTeamIndex !== prevActive ||
-              state.teams[2].score !== prevScore
-            );
+            return state.setEnded !== prevEnded || state.revision > prevRevision;
           },
-          {},
-          status.active,
-          status.score,
+          { timeout: 10000 },
+          status.revision,
           status.ended
         );
       }
@@ -339,8 +377,11 @@ async function run() {
       await control.waitForFunction(() => window.SMAScoreSync.read().setEnded === true, {
         timeout: 15000,
       });
-      await control.waitForSelector("#nextSetBtn:not([hidden])");
-      await control.click("#nextSetBtn");
+      await control.waitForFunction(() => {
+        const btn = document.getElementById("nextSetBtn");
+        return btn && !btn.hidden && !btn.disabled;
+      });
+      await control.evaluate(() => document.getElementById("nextSetBtn").click());
       await control.waitForFunction(() => {
         const state = window.SMAScoreSync.read();
         return state && !state.setEnded && JSON.stringify(state.throwOrder) === "[0,1,2]";
