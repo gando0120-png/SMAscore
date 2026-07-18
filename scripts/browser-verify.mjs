@@ -60,24 +60,36 @@ async function withPage(browser, url, fn) {
   }
 }
 
-async function seedMatch(page, teamNames, format = "win-2") {
+async function seedMatch(page, teamNames, format = "win-2", options = {}) {
+  const matchId =
+    options.matchId ||
+    `match-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await page.evaluate(
-    ({ teamNames, format, room }) => {
+    ({ teamNames, format, room, matchId, tournament, match }) => {
       localStorage.setItem("smascore-room-id", room);
       localStorage.setItem(
         "smascore-match-config",
         JSON.stringify({
-          tournament: "検証大会",
-          match: "検証試合",
+          tournament,
+          match,
           format,
           teamCount: teamNames.length,
           teamNames,
+          matchId,
         })
       );
       localStorage.removeItem("smascore-game-state");
     },
-    { teamNames, format, room: ROOM }
+    {
+      teamNames,
+      format,
+      room: options.room || ROOM,
+      matchId,
+      tournament: options.tournament || "検証大会",
+      match: options.match || "検証試合",
+    }
   );
+  return matchId;
 }
 
 async function openControl(browser, teamNames, options = {}) {
@@ -91,23 +103,36 @@ async function openControl(browser, teamNames, options = {}) {
     waitUntil: "networkidle0",
   });
   if (!options.reuseState) {
-    await seedMatch(page, teamNames);
+    await seedMatch(page, teamNames, "win-2", {
+      room,
+      matchId: options.matchId,
+      tournament: options.tournament,
+      match: options.match,
+    });
   } else {
     await page.evaluate(
-      ({ teamNames, room }) => {
+      ({ teamNames, room, matchId }) => {
         localStorage.setItem("smascore-room-id", room);
+        const existing = (() => {
+          try {
+            return JSON.parse(localStorage.getItem("smascore-match-config") || "null");
+          } catch {
+            return null;
+          }
+        })();
         localStorage.setItem(
           "smascore-match-config",
           JSON.stringify({
-            tournament: "検証大会",
-            match: "検証試合",
-            format: "win-2",
+            tournament: existing?.tournament || "検証大会",
+            match: existing?.match || "検証試合",
+            format: existing?.format || "win-2",
             teamCount: teamNames.length,
             teamNames,
+            matchId: matchId || existing?.matchId || `match-${Date.now()}`,
           })
         );
       },
-      { teamNames, room }
+      { teamNames, room, matchId: options.matchId }
     );
   }
   await page.goto(`http://127.0.0.1:${PORT}/control/?room=${room}`, {
@@ -181,6 +206,7 @@ async function run() {
   const browser = await puppeteer.launch({
     executablePath: "/usr/local/bin/google-chrome",
     headless: true,
+    protocolTimeout: 120000,
     args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
   });
 
@@ -448,7 +474,7 @@ async function run() {
       await page.close();
     }
 
-    // 13) new match flow
+    // 13) new match navigates to setup
     {
       const control = await openControl(browser, ["A", "B"]);
       await control.click(".header__settings");
@@ -460,6 +486,174 @@ async function run() {
       assert(control.url().includes("/setup/"), `13 url ${control.url()}`);
       results.push("13. 新しい試合を作成 OK");
       await control.close();
+    }
+
+    // 14-19) Overlay auto-switches on new match without reload
+    {
+      const room = nextRoom();
+      const control = await openControl(browser, ["旧A", "旧B"], {
+        room,
+        tournament: "旧大会",
+        match: "旧試合",
+      });
+      const overlay = await openOverlay(browser);
+
+      await control.evaluate(() => {
+        document.querySelector('.key[data-value="12"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await overlay.waitForFunction(() => window.SMAScoreSync.read()?.teams?.[0]?.score === 12);
+
+      await control.evaluate(() => {
+        const state = window.SMAScoreSync.read();
+        state.teams[0].score = 50;
+        state.teams[0].won = true;
+        state.teams[0].setWins = 2;
+        state.matchEnded = true;
+        state.matchWinnerIndex = 0;
+        state.setEnded = false;
+        return window.SMAScoreSync.publish(state, {
+          baseRevision: window.SMAScoreSync.getRevision(state),
+        });
+      });
+      await overlay.waitForFunction(() => window.SMAScoreSync.read()?.matchEnded === true);
+      const oldMatchId = await overlay.evaluate(() => window.SMAScoreSync.read().matchId);
+      const oldRevision = await overlay.evaluate(() => window.SMAScoreSync.read().revision);
+      assert(!!oldMatchId, "14 old matchId missing");
+      assert(oldRevision >= 1, "14 old revision");
+
+      // confirmNewMatch 相当: clear 後に setup へ（Overlay は開いたまま）
+      await Promise.all([
+        control.waitForNavigation({ waitUntil: "networkidle0" }),
+        control.evaluate(async () => {
+          window.confirm = () => true;
+          await window.SMAScoreSync.clear();
+          window.location.href = "../setup/";
+        }),
+      ]);
+      assert(control.url().includes("/setup/"), "14 setup nav");
+
+      const newMatchId = `match-new-${Date.now()}`;
+      await seedMatch(control, ["新C", "新A", "新B"], "win-2", {
+        room,
+        matchId: newMatchId,
+        tournament: "新大会",
+        match: "新試合",
+      });
+      await control.goto(`http://127.0.0.1:${PORT}/control/?room=${room}`, {
+        waitUntil: "networkidle0",
+      });
+      await control.evaluate(() => {
+        window.confirm = () => true;
+      });
+      await control.waitForFunction((id) => window.SMAScoreSync.read()?.matchId === id, {}, newMatchId);
+
+      // Overlay must switch without reload
+      await overlay.waitForFunction(
+        (id) => {
+          const state = window.SMAScoreSync.read();
+          return state && state.matchId === id && state.matchEnded !== true;
+        },
+        { timeout: 15000 },
+        newMatchId
+      );
+
+      const overlaySnap = await overlay.evaluate(() => {
+        const state = window.SMAScoreSync.read();
+        const names = [...document.querySelectorAll("#overlayRoot .team__name")].map((el) =>
+          el.textContent.replace(/失格/g, "").trim()
+        );
+        const body = document.body.innerText;
+        return {
+          matchId: state.matchId,
+          tournament: state.tournament,
+          match: state.match,
+          names,
+          scores: state.teams.map((t) => t.score),
+          setWins: state.teams.map((t) => t.setWins),
+          misses: state.teams.map((t) => t.misses),
+          matchEnded: state.matchEnded,
+          throwOrder: state.throwOrder,
+          bodyHasMatchEnd: body.includes("試合終了"),
+        };
+      });
+
+      assert(overlaySnap.matchId === newMatchId, `15 matchId ${overlaySnap.matchId}`);
+      assert(overlaySnap.tournament === "新大会", `15 tournament ${overlaySnap.tournament}`);
+      assert(overlaySnap.match === "新試合", `15 match ${overlaySnap.match}`);
+      assert(overlaySnap.names.join("|") === "新C|新A|新B", `15 names ${overlaySnap.names}`);
+      assert(overlaySnap.scores.every((s) => s === 0), `15 scores ${overlaySnap.scores}`);
+      assert(overlaySnap.setWins.every((s) => s === 0), `15 setWins ${overlaySnap.setWins}`);
+      assert(overlaySnap.misses.every((s) => s === 0), `15 misses ${overlaySnap.misses}`);
+      assert(!overlaySnap.matchEnded, "15 matchEnded still true");
+      assert(!overlaySnap.bodyHasMatchEnd, "15 still shows 試合終了");
+      assert(JSON.stringify(overlaySnap.throwOrder) === "[0,1,2]", "15 throwOrder");
+      results.push("14-15. Overlay再読込なしで新試合へ切替 OK");
+
+      await control.evaluate(() => {
+        document.querySelector('.key[data-value="7"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await overlay.waitForFunction(() => window.SMAScoreSync.read()?.teams?.[0]?.score === 7, {
+        timeout: 10000,
+      });
+      results.push("16. 新試合の得点がOverlayへ反映 OK");
+
+      // 旧試合 revision が大きくても新 matchId を受け入れる
+      const lowRevMatchId = `match-lowrev-${Date.now()}`;
+      await control.evaluate(({ lowRevMatchId }) => {
+        const payload = {
+          matchId: lowRevMatchId,
+          tournament: "低rev大会",
+          match: "低rev試合",
+          format: "win-2",
+          teamCount: 2,
+          teams: [
+            { name: "X", score: 0, total: 0, misses: 0, won: false, disqualified: false, setWins: 0 },
+            { name: "Y", score: 0, total: 0, misses: 0, won: false, disqualified: false, setWins: 0 },
+          ],
+          throwOrder: [1, 0],
+          activeTeamIndex: 1,
+          setStartTeamIndex: 1,
+          setEnded: false,
+          setWinnerIndex: null,
+          matchEnded: false,
+          matchWinnerIndex: null,
+          pendingSelection: null,
+          throwLog: [],
+        };
+        return window.SMAScoreSync.publish(payload, { baseRevision: 0 });
+      }, { lowRevMatchId });
+
+      await overlay.waitForFunction(
+        (id) => {
+          const state = window.SMAScoreSync.read();
+          const names = [...document.querySelectorAll("#overlayRoot .team__name")].map((el) =>
+            el.textContent.replace(/失格/g, "").trim()
+          );
+          return state?.matchId === id && names.join("|") === "Y|X";
+        },
+        { timeout: 15000 },
+        lowRevMatchId
+      );
+      results.push("17. 旧revisionが大きくても新matchIdを受容 OK");
+
+      const overlay2 = await openOverlay(browser);
+      await overlay2.waitForFunction(
+        (id) => window.SMAScoreSync.read()?.matchId === id,
+        { timeout: 15000 },
+        lowRevMatchId
+      );
+      const names2 = await overlay2.$$eval("#overlayRoot .team__name", (els) =>
+        els.map((el) => el.textContent.replace(/失格/g, "").trim())
+      );
+      assert(names2.join("|") === "Y|X", `18 other tab ${names2}`);
+      results.push("18. 別タブでも新試合状態を共有 OK");
+
+      await overlay2.close();
+      await overlay.close();
+      await control.close();
+      results.push("19. 新試合作成後のOverlay自動切替一式 OK");
     }
 
     console.log("\nBROWSER VERIFY RESULTS");

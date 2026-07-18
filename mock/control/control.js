@@ -50,7 +50,19 @@
     match: matchConfig.match,
     format: matchConfig.format,
     teamCount: matchConfig.teamCount,
+    matchId:
+      typeof matchConfig.matchId === "string" && matchConfig.matchId.trim()
+        ? matchConfig.matchId.trim()
+        : window.SMAScoreMatchConfig?.createMatchId?.() ?? `match-${Date.now()}`,
   };
+
+  // 旧設定に matchId が無い場合はここで補完して永続化
+  if (!matchConfig.matchId) {
+    window.SMAScoreMatchConfig?.save({
+      ...matchConfig,
+      matchId: META.matchId,
+    });
+  }
 
   const teams = matchConfig.teamNames.map((name) => ({
     name,
@@ -769,19 +781,24 @@
       format: META.format,
       teamCount: META.teamCount,
       teamNames: teams.map((team) => team.name),
+      matchId: META.matchId,
     });
 
     closeSettings();
     renderAll();
   }
 
-  function confirmNewMatch() {
+  async function confirmNewMatch() {
     const ok = window.confirm("現在の試合データは終了します。新しい試合を作成しますか？");
     if (!ok) return;
 
-    if (window.SMAScoreSync?.clear) {
-      SMAScoreSync.clear();
-    } else {
+    try {
+      if (window.SMAScoreSync?.clear) {
+        await SMAScoreSync.clear();
+      } else {
+        localStorage.removeItem("smascore-game-state");
+      }
+    } catch {
       try {
         localStorage.removeItem("smascore-game-state");
       } catch {
@@ -794,6 +811,7 @@
 
   function buildSyncState() {
     return {
+      matchId: META.matchId,
       tournament: META.tournament,
       match: META.match,
       format: META.format,
@@ -817,15 +835,19 @@
     if (!state?.teams?.length) return;
 
     const revision = window.SMAScoreSync?.getRevision(state) ?? 0;
-    if (revision <= localRevision) return;
+    const incomingMatchId = window.SMAScoreSync?.getMatchId?.(state) || state.matchId || "";
+    const sameMatch = !incomingMatchId || !META.matchId || incomingMatchId === META.matchId;
 
-    if (revision > localRevision && pendingSelection !== null) {
+    if (sameMatch && revision <= localRevision) return;
+
+    if (sameMatch && revision > localRevision && pendingSelection !== null) {
       console.warn("[SMAScore Control] Remote update received; pending input cleared.");
     }
 
     isApplyingRemote = true;
     localRevision = revision;
 
+    if (incomingMatchId) META.matchId = incomingMatchId;
     if (state.tournament !== undefined) META.tournament = state.tournament;
     if (state.match !== undefined) META.match = state.match;
     if (state.format !== undefined) META.format = state.format;
@@ -877,17 +899,28 @@
   }
 
   function publishSyncWithRetry(state, baseRevision, attemptsLeft) {
+    const stateMatchId = state.matchId || META.matchId || "";
     const pendingRevision = baseRevision + 1;
     localRevision = pendingRevision;
 
     SMAScoreSync.publish(state, { baseRevision }).then((result) => {
       if (result?.committed && result.data) {
         localRevision = SMAScoreSync.getRevision(result.data);
+        const committedMatchId = SMAScoreSync.getMatchId?.(result.data) || result.data.matchId;
+        if (committedMatchId) META.matchId = committedMatchId;
         return;
       }
 
       if (result?.conflict && result.remote) {
         const remoteRevision = SMAScoreSync.getRevision(result.remote);
+        const remoteMatchId = SMAScoreSync.getMatchId?.(result.remote) || result.remote.matchId || "";
+
+        // 別試合の remote と衝突した場合は現行（新試合）を優先して再送
+        if (stateMatchId && remoteMatchId && stateMatchId !== remoteMatchId && attemptsLeft > 0) {
+          publishSyncWithRetry(buildSyncState(), 0, attemptsLeft - 1);
+          return;
+        }
+
         if (attemptsLeft > 0 && remoteRevision >= pendingRevision) {
           // より新しい remote がある場合は、現行メモリ状態を新しい base で再送
           publishSyncWithRetry(buildSyncState(), remoteRevision, attemptsLeft - 1);
@@ -1112,19 +1145,30 @@
 
     SMAScoreSync.subscribe((state) => {
       if (!state?.teams?.length) return;
-      if (SMAScoreSync.getRevision(state) > localRevision) {
+      const incomingMatchId = SMAScoreSync.getMatchId?.(state) || state.matchId || "";
+      const sameMatch = !incomingMatchId || !META.matchId || incomingMatchId === META.matchId;
+      if (!sameMatch || SMAScoreSync.getRevision(state) > localRevision) {
         applySyncState(state);
       }
     });
 
     const remote = await SMAScoreSync.ready(3000);
     const remoteRevision = SMAScoreSync.getRevision(remote);
+    const remoteMatchId = remote
+      ? SMAScoreSync.getMatchId?.(remote) || remote.matchId || ""
+      : "";
+    const remoteIsSameMatch =
+      !remoteMatchId || !META.matchId || remoteMatchId === META.matchId;
 
-    if (remote?.teams?.length && remoteRevision > 0) {
+    if (remote?.teams?.length && remoteRevision > 0 && remoteIsSameMatch) {
       applySyncState(remote);
     } else {
+      // 新規試合、または room に別 matchId が残っている場合はローカル試合を publish
       renderAll({ skipPublish: true });
-      const result = await SMAScoreSync.publish(buildSyncState(), { baseRevision: remoteRevision });
+      localRevision = 0;
+      const result = await SMAScoreSync.publish(buildSyncState(), {
+        baseRevision: remoteIsSameMatch ? remoteRevision : 0,
+      });
       if (result?.committed && result.data) {
         localRevision = SMAScoreSync.getRevision(result.data);
       }

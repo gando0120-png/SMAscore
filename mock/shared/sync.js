@@ -1,13 +1,17 @@
 /**
  * SMAScore — 試合状態の同期
  * Firebase Realtime Database（revision + transaction）+ localStorage バックアップ + BroadcastChannel
+ *
+ * matchId が変わった state は revision が小さくても新しい試合として受け入れる
  */
 (function () {
   const CHANNEL_NAME = "smascore-game";
   const STORAGE_KEY = "smascore-game-state";
+  const CLEAR_SENTINEL = "__smascore_sync_clear__";
 
   let channel = null;
   let lastDeliveredRevision = 0;
+  let lastDeliveredMatchId = "";
 
   try {
     channel = new BroadcastChannel(CHANNEL_NAME);
@@ -19,6 +23,14 @@
     if (!data || typeof data !== "object") return 0;
     if (typeof data.revision === "number") return data.revision;
     return 0;
+  }
+
+  function getMatchId(data) {
+    if (!data || typeof data !== "object") return "";
+    if (typeof data.matchId === "string" && data.matchId.trim()) {
+      return data.matchId.trim();
+    }
+    return "";
   }
 
   function readStored() {
@@ -57,6 +69,28 @@
     return Date.now();
   }
 
+  function resetDeliveryCursor() {
+    lastDeliveredRevision = 0;
+    lastDeliveredMatchId = "";
+  }
+
+  function shouldAccept(data) {
+    if (!data || typeof data !== "object") return false;
+
+    const revision = getRevision(data);
+    const matchId = getMatchId(data);
+
+    if (matchId && lastDeliveredMatchId && matchId !== lastDeliveredMatchId) {
+      return true;
+    }
+
+    if (matchId && !lastDeliveredMatchId) {
+      return revision > 0 || !!data.teams;
+    }
+
+    return revision > lastDeliveredRevision;
+  }
+
   function publishLocal(payload) {
     writeStored(payload);
     if (channel) {
@@ -80,6 +114,18 @@
       ref.transaction(
         (current) => {
           const currentRevision = getRevision(current);
+          const currentMatchId = getMatchId(current);
+          const nextMatchId = getMatchId(payload);
+
+          // 別試合への切替は baseRevision に関係なく書き込む
+          if (nextMatchId && currentMatchId && nextMatchId !== currentMatchId) {
+            return {
+              ...payload,
+              revision: 1,
+              updatedAt: serverTimestamp(),
+            };
+          }
+
           if (currentRevision > baseRevision) {
             return undefined;
           }
@@ -140,7 +186,11 @@
 
   function publish(state, options) {
     const baseRevision = options?.baseRevision ?? lastDeliveredRevision;
-    const pendingRevision = baseRevision + 1;
+    const matchId = getMatchId(state);
+    const isNewMatch =
+      !!matchId && !!lastDeliveredMatchId && matchId !== lastDeliveredMatchId;
+
+    const pendingRevision = isNewMatch ? 1 : baseRevision + 1;
     const payload = {
       ...state,
       revision: pendingRevision,
@@ -149,19 +199,29 @@
 
     publishLocal(payload);
     lastDeliveredRevision = pendingRevision;
+    if (matchId) lastDeliveredMatchId = matchId;
 
-    return publishToFirebase(payload, baseRevision).then((result) => {
+    const firebaseBase = isNewMatch ? 0 : baseRevision;
+
+    return publishToFirebase(payload, firebaseBase).then((result) => {
       if (result.committed && result.data) {
         lastDeliveredRevision = getRevision(result.data);
+        const committedMatchId = getMatchId(result.data);
+        if (committedMatchId) lastDeliveredMatchId = committedMatchId;
         publishLocal(result.data);
         return result;
       }
 
       if (result.conflict && result.remote) {
         const remoteRevision = getRevision(result.remote);
-        // ローカルに既に新しい revision を載せている場合、古い remote で上書きしない
+        const remoteMatchId = getMatchId(result.remote);
+        if (remoteMatchId && matchId && remoteMatchId !== matchId) {
+          // 別試合の remote — ローカル新試合を優先保持
+          return result;
+        }
         if (remoteRevision >= pendingRevision) {
           lastDeliveredRevision = remoteRevision;
+          if (remoteMatchId) lastDeliveredMatchId = remoteMatchId;
           publishLocal(result.remote);
         }
       } else if (!result.committed) {
@@ -173,9 +233,14 @@
   }
 
   function deliver(callback, data) {
+    if (!shouldAccept(data)) return false;
+
     const revision = getRevision(data);
-    if (revision <= lastDeliveredRevision) return false;
+    const matchId = getMatchId(data);
+
     lastDeliveredRevision = revision;
+    if (matchId) lastDeliveredMatchId = matchId;
+
     writeStored(data);
     callback(data);
     return true;
@@ -184,12 +249,22 @@
   function subscribe(callback) {
     if (channel) {
       channel.onmessage = (event) => {
+        if (event.data && event.data[CLEAR_SENTINEL]) {
+          resetDeliveryCursor();
+          removeStored();
+          return;
+        }
         deliver(callback, event.data);
       };
     }
 
     window.addEventListener("storage", (event) => {
-      if (event.key !== STORAGE_KEY || !event.newValue) return;
+      if (event.key !== STORAGE_KEY) return;
+      if (!event.newValue) {
+        // 削除イベント: delivery cursor のみリセット（一瞬の欠落で UI は消さない）
+        resetDeliveryCursor();
+        return;
+      }
       try {
         deliver(callback, JSON.parse(event.newValue));
       } catch {
@@ -201,7 +276,12 @@
     if (stateRef) {
       stateRef.on("value", (snapshot) => {
         const data = snapshot.val();
-        if (data) deliver(callback, data);
+        if (!data) {
+          // null では UI を消さず、次の新試合を受け入れるよう cursor だけ戻す
+          resetDeliveryCursor();
+          return;
+        }
+        deliver(callback, data);
       });
     }
 
@@ -243,8 +323,15 @@
   }
 
   function clear() {
-    lastDeliveredRevision = 0;
+    resetDeliveryCursor();
     removeStored();
+    if (channel) {
+      try {
+        channel.postMessage({ [CLEAR_SENTINEL]: true });
+      } catch {
+        /* ignore */
+      }
+    }
     return clearFirebase();
   }
 
@@ -256,6 +343,7 @@
     read: readStored,
     clear,
     getRevision,
+    getMatchId,
     STORAGE_KEY,
   };
 })();

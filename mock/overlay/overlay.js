@@ -22,7 +22,8 @@
     document.documentElement.classList.add("debug-background");
   }
 
-  let prevScores = [];
+  let prevScores = {};
+  let currentMatchId = "";
   let currentOverlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
     showTournament: true,
     showMatch: true,
@@ -33,6 +34,7 @@
   /** localStorage キー: smascore-game-state（試合同期）, smascore-overlay-settings（Overlay表示） */
   function createInitialState() {
     return {
+      matchId: "",
       tournament: "",
       match: "",
       teamCount: 2,
@@ -109,6 +111,7 @@
     }
 
     return {
+      matchId: `demo-${count}`,
       tournament: "デモ大会",
       match: "デモ試合",
       teamCount: count,
@@ -118,6 +121,8 @@
       setStartTeamIndex: throwOrder[0] ?? 0,
       setEnded: demoSetEnd,
       setWinnerIndex,
+      matchEnded: false,
+      matchWinnerIndex: null,
       pendingSelection: demoSetEnd ? null : pendingSelection,
       overlaySettings: currentOverlaySettings,
     };
@@ -441,12 +446,30 @@
     applyScoreAnimations(entries, settings);
   }
 
+  function resetForNewMatch(matchId) {
+    currentMatchId = matchId || "";
+    prevScores = {};
+  }
+
   function applyState(state) {
     if (demoTeamCount !== null) {
       renderOverlay(createDemoState(demoTeamCount));
       return;
     }
-    renderOverlay(state || createInitialState());
+
+    const next = state || createInitialState();
+    const incomingMatchId =
+      window.SMAScoreSync?.getMatchId?.(next) ||
+      (typeof next.matchId === "string" ? next.matchId : "") ||
+      "";
+
+    if (incomingMatchId && currentMatchId && incomingMatchId !== currentMatchId) {
+      resetForNewMatch(incomingMatchId);
+    } else if (incomingMatchId && !currentMatchId) {
+      currentMatchId = incomingMatchId;
+    }
+
+    renderOverlay(next);
   }
 
   applyVisualSettings(currentOverlaySettings);

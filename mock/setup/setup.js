@@ -24,6 +24,7 @@
       format,
       teamCount,
       teamNames,
+      matchId: SMAScoreMatchConfig.createMatchId(),
     });
 
     window.location.href = "../control/";

@@ -4,6 +4,13 @@
 (function () {
   const STORAGE_KEY = "smascore-match-config";
 
+  function createMatchId() {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    return `match-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
   function save(config) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
   }
@@ -37,5 +44,11 @@
     return labels[format] ?? "";
   }
 
-  window.SMAScoreMatchConfig = { STORAGE_KEY, save, load, formatToLabel };
+  window.SMAScoreMatchConfig = {
+    STORAGE_KEY,
+    save,
+    load,
+    formatToLabel,
+    createMatchId,
+  };
 })();
