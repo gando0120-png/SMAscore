@@ -10,6 +10,10 @@
 
 html {
   min-height: 100%;
+  background: transparent;
+}
+
+html.debug-background {
   background:
     linear-gradient(160deg, #1c2838 0%, #0f1419 45%, #182030 100%);
 }
@@ -113,12 +117,12 @@ body {
 
 .overlay--2::before {
   left: 0;
-  background: linear-gradient(180deg, #448aff 0%, #1565c0 100%);
+  background: linear-gradient(180deg, var(--accent-left, #448aff) 0%, color-mix(in srgb, var(--accent-left, #448aff) 70%, #000) 100%);
 }
 
 .overlay--2::after {
   right: 0;
-  background: linear-gradient(180deg, #ff5252 0%, #c62828 100%);
+  background: linear-gradient(180deg, var(--accent-right, #ff5252) 0%, color-mix(in srgb, var(--accent-right, #ff5252) 70%, #000) 100%);
 }
 
 /* ── 3・4チーム：情報バー＋横一列 ── */
@@ -403,14 +407,6 @@ body {
   line-height: 1;
 }
 
-.center__set-num--left {
-  color: #82b1ff;
-}
-
-.center__set-num--right {
-  color: #ff8a80;
-}
-
 .center__set-divider {
   font-size: 18px;
   font-weight: 700;
@@ -455,6 +451,10 @@ body {
   font-size: 12px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.28);
+}
+
+.info__set-divider--bar {
+  margin: 0 2px;
 }
 
 .info__throw,

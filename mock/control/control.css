@@ -153,10 +153,12 @@ button {
 }
 
 .header__set {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 5px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   margin-top: 3px;
+  max-width: 100%;
 }
 
 .header__set-label {
@@ -164,27 +166,62 @@ button {
   font-weight: 700;
   letter-spacing: 0.16em;
   color: rgba(255, 255, 255, 0.38);
+  flex-shrink: 0;
+}
+
+.header__set-score {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 0;
+  min-width: 0;
+}
+
+.header__set-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+}
+
+.header__set-team {
+  font-size: clamp(9px, 2.4vw, 10px);
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.72);
+  max-width: 4.5em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .header__set-num {
-  font-size: clamp(14px, 3.8vw, 16px);
+  font-size: clamp(13px, 3.6vw, 15px);
   font-weight: 900;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 
-.header__set-num--left {
-  color: var(--color-team-1);
+.header__set-unit {
+  font-size: clamp(8px, 2.2vw, 9px);
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.42);
 }
 
-.header__set-num--right {
-  color: var(--color-team-2);
-}
+.header__set-item--color-0 .header__set-num { color: var(--color-team-1); }
+.header__set-item--color-1 .header__set-num { color: var(--color-team-2); }
+.header__set-item--color-2 .header__set-num { color: var(--color-team-3); }
+.header__set-item--color-3 .header__set-num { color: var(--color-team-4); }
 
 .header__set-divider {
   font-size: 12px;
   font-weight: 700;
   color: rgba(255, 255, 255, 0.28);
+  margin: 0 4px;
+}
+
+.header__set-divider--bar {
+  font-size: 11px;
+  margin: 0 3px;
 }
 
 /* ── 全チーム得点一覧 ── */
@@ -403,51 +440,71 @@ button {
   display: none;
 }
 
-.throw-order__swap {
-  width: 100%;
-  min-height: 40px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  font-size: clamp(11px, 3vw, 12px);
+.throw-order__title {
+  margin-bottom: 6px;
+  font-size: clamp(9px, 2.4vw, 10px);
   font-weight: 700;
-  letter-spacing: 0.04em;
-  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.45);
 }
 
-.throw-order__swap:disabled {
-  opacity: 0.45;
-}
-
-.throw-order__teams {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
+.throw-order__list {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
-  margin-top: 6px;
 }
 
-.throw-order__teams[hidden] {
-  display: none;
-}
-
-.throw-order__team {
-  min-height: 38px;
+.throw-order__row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
   padding: 6px 8px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  font-size: clamp(10px, 2.8vw, 11px);
-  font-weight: 700;
-  color: rgba(255, 255, 255, 0.85);
 }
 
-.throw-order__team--color-0 { border-color: rgba(68, 138, 255, 0.45); }
-.throw-order__team--color-1 { border-color: rgba(255, 82, 82, 0.45); }
-.throw-order__team--color-2 { border-color: rgba(102, 187, 106, 0.45); }
-.throw-order__team--color-3 { border-color: rgba(255, 202, 40, 0.45); }
+.throw-order__row--color-0 { border-color: rgba(68, 138, 255, 0.45); }
+.throw-order__row--color-1 { border-color: rgba(255, 82, 82, 0.45); }
+.throw-order__row--color-2 { border-color: rgba(102, 187, 106, 0.45); }
+.throw-order__row--color-3 { border-color: rgba(255, 202, 40, 0.45); }
 
-.throw-order__team:disabled {
+.throw-order__pos {
+  font-size: 12px;
+  font-weight: 900;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+}
+
+.throw-order__name {
+  font-size: clamp(11px, 3vw, 12px);
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.throw-order__actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.throw-order__btn {
+  min-width: 40px;
+  min-height: 34px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.throw-order__btn:disabled {
   opacity: 0.35;
 }
 
