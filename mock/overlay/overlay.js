@@ -2,6 +2,8 @@
  * SMAScore Overlay — 管理画面と同期表示（2～4チーム対応）
  */
 (function () {
+  const ThrowOrder = window.SMAScoreThrowOrder;
+
   const overlayWrap = document.getElementById("overlayWrap");
   const overlayMeta = document.getElementById("overlayMeta");
   const overlayRoot = document.getElementById("overlayRoot");
@@ -14,6 +16,11 @@
   const demoPending = urlParams.get("sel");
   const demoSetEnd = urlParams.get("setend") === "1";
   const demoActive = urlParams.has("active") ? Number(urlParams.get("active")) : 1;
+  const debugBackground = urlParams.get("debugBackground") === "1";
+
+  if (debugBackground) {
+    document.documentElement.classList.add("debug-background");
+  }
 
   let prevScores = [];
   let currentOverlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
@@ -49,6 +56,7 @@
           setWins: 0,
         },
       ],
+      throwOrder: [0, 1],
       activeTeamIndex: 0,
       setStartTeamIndex: 0,
       setEnded: false,
@@ -92,6 +100,9 @@
 
     const activeTeamIndex = demoSetEnd ? -1 : Math.min(Math.max(0, demoActive), count - 1);
     const setWinnerIndex = demoSetEnd ? 0 : null;
+    const throwOrder = ThrowOrder
+      ? ThrowOrder.fromStartIndex(count, Math.max(0, activeTeamIndex))
+      : Array.from({ length: count }, (_, i) => i);
 
     if (demoSetEnd) {
       teams[0].won = true;
@@ -102,7 +113,9 @@
       match: "デモ試合",
       teamCount: count,
       teams,
+      throwOrder,
       activeTeamIndex: demoSetEnd ? 0 : activeTeamIndex,
+      setStartTeamIndex: throwOrder[0] ?? 0,
       setEnded: demoSetEnd,
       setWinnerIndex,
       pendingSelection: demoSetEnd ? null : pendingSelection,
@@ -117,9 +130,30 @@
     return 2;
   }
 
-  function getTeams(state, count) {
+  function resolveThrowOrder(state, count) {
+    if (ThrowOrder) {
+      if (Array.isArray(state.throwOrder)) {
+        return ThrowOrder.normalize(state.throwOrder, count);
+      }
+      if (typeof state.setStartTeamIndex === "number") {
+        return ThrowOrder.fromStartIndex(count, state.setStartTeamIndex);
+      }
+      return ThrowOrder.createDefault(count);
+    }
+
+    if (Array.isArray(state.throwOrder) && state.throwOrder.length === count) {
+      return state.throwOrder.slice();
+    }
+    return Array.from({ length: count }, (_, i) => i);
+  }
+
+  function getOrderedEntries(state, count) {
     const source = state.teams || [];
-    return Array.from({ length: count }, (_, i) => source[i] || null);
+    const order = resolveThrowOrder(state, count);
+    return order.map((teamIndex) => ({
+      teamIndex,
+      team: source[teamIndex] || null,
+    }));
   }
 
   function resolveOverlaySettings(state) {
@@ -197,25 +231,32 @@
     return `<span class="waiting__status">入力待ち</span>`;
   }
 
-  function renderSetScores(teams, layout) {
-    const nums = teams
-      .map((team, index) => {
-        const wins = team ? team.setWins : 0;
-        const colorClass = `info__set-num--${index}`;
-        return `<span class="info__set-num ${colorClass}">${wins}</span>`;
+  function renderSetScores(entries, layout) {
+    const dividerClass = entries.length === 2 ? "info__set-divider" : "info__set-divider info__set-divider--bar";
+    const dividerText = entries.length === 2 ? "-" : "|";
+
+    const nums = entries
+      .map((entry, position) => {
+        const wins = entry.team ? entry.team.setWins : 0;
+        const colorClass = `info__set-num--${entry.teamIndex}`;
+        const chunk = `<span class="info__set-num ${colorClass}">${wins}</span>`;
+        if (position === 0) return chunk;
+        return `<span class="${dividerClass}">${dividerText}</span>${chunk}`;
       })
-      .join(`<span class="info__set-divider">-</span>`);
+      .join("");
 
     if (layout === "center") {
-      const left = teams[0] ? teams[0].setWins : 0;
-      const right = teams[1] ? teams[1].setWins : 0;
+      const left = entries[0]?.team ? entries[0].team.setWins : 0;
+      const right = entries[1]?.team ? entries[1].team.setWins : 0;
+      const leftColor = entries[0] ? entries[0].teamIndex : 0;
+      const rightColor = entries[1] ? entries[1].teamIndex : 1;
       return `
         <div class="center__set">
           <span class="center__set-label">SET</span>
           <span class="center__set-score">
-            <span class="center__set-num center__set-num--left">${left}</span>
+            <span class="center__set-num info__set-num--${leftColor}">${left}</span>
             <span class="center__set-divider">-</span>
-            <span class="center__set-num center__set-num--right">${right}</span>
+            <span class="center__set-num info__set-num--${rightColor}">${right}</span>
           </span>
         </div>
       `;
@@ -248,10 +289,10 @@
     `;
   }
 
-  function renderTeamSide(team, index, side, isActive) {
+  function renderTeamSide(team, teamIndex, side, isActive) {
     if (!team) {
       return `
-        <section class="team team--${side}" data-team-index="${index}" aria-hidden="true">
+        <section class="team team--${side}" data-team-index="${teamIndex}" aria-hidden="true">
           <p class="team__name">—</p>
           <p class="team__score">0</p>
           <p class="team__total"><span class="team__total-label">TOTAL</span><span class="team__total-value">0</span></p>
@@ -268,7 +309,7 @@
         : `<span class="team__total-label">TOTAL</span><span class="team__total-value">${team.total}</span>`;
 
     return `
-      <section class="team team--${side} team--color-${index}${activeClass}" data-team-index="${index}" aria-label="${team.name}" style="--team-color:${TEAM_COLORS[index % 4]}">
+      <section class="team team--${side} team--color-${teamIndex}${activeClass}" data-team-index="${teamIndex}" aria-label="${team.name}" style="--team-color:${TEAM_COLORS[teamIndex % 4]}">
         <p class="team__name">${team.name}${team.disqualified ? ' <span class="team__dq">失格</span>' : ""}</p>
         <p class="team__score${victoryClass}" aria-label="現在得点">${team.score}</p>
         <p class="team__total">${totalMarkup}</p>
@@ -277,10 +318,10 @@
     `;
   }
 
-  function renderTeamCard(team, index, isActive) {
+  function renderTeamCard(team, teamIndex, isActive) {
     if (!team) {
       return `
-        <section class="team team--card" data-team-index="${index}" aria-hidden="true">
+        <section class="team team--card" data-team-index="${teamIndex}" aria-hidden="true">
           <p class="team__name">—</p>
           <p class="team__score">0</p>
           <p class="team__total"><span class="team__total-label">TOTAL</span><span class="team__total-value">0</span></p>
@@ -293,7 +334,7 @@
     const victoryClass = team.won ? " team__score--victory" : "";
 
     return `
-      <section class="team team--card team--color-${index}${activeClass}" data-team-index="${index}" aria-label="${team.name}" style="--team-color:${TEAM_COLORS[index % 4]}">
+      <section class="team team--card team--color-${teamIndex}${activeClass}" data-team-index="${teamIndex}" aria-label="${team.name}" style="--team-color:${TEAM_COLORS[teamIndex % 4]}">
         <p class="team__name">${team.name}${team.disqualified ? ' <span class="team__dq">失格</span>' : ""}</p>
         <p class="team__score${victoryClass}" aria-label="現在得点">${team.score}</p>
         <p class="team__total"><span class="team__total-label">TOTAL</span><span class="team__total-value">${team.total}</span></p>
@@ -302,47 +343,57 @@
     `;
   }
 
-  function renderOverlayTwo(teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam) {
+  function renderOverlayTwo(entries, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam) {
+    const left = entries[0];
+    const right = entries[1];
+    const leftColor = TEAM_COLORS[(left?.teamIndex ?? 0) % 4];
+    const rightColor = TEAM_COLORS[(right?.teamIndex ?? 1) % 4];
+
     overlayRoot.className = "overlay overlay--2";
+    overlayRoot.style.setProperty("--accent-left", leftColor);
+    overlayRoot.style.setProperty("--accent-right", rightColor);
     overlayRoot.innerHTML = `
-      ${renderTeamSide(teams[0], 0, "left", activeIndex === 0)}
+      ${renderTeamSide(left?.team, left?.teamIndex ?? 0, "left", activeIndex === (left?.teamIndex ?? -1))}
       <section class="center" aria-label="試合状況">
-        ${renderSetScores(teams, "center")}
+        ${renderSetScores(entries, "center")}
         ${renderThrowBlock(activeTeam)}
         ${renderWaitingBlock(state, winnerTeam, matchWinnerTeam)}
       </section>
-      ${renderTeamSide(teams[1], 1, "right", activeIndex === 1)}
+      ${renderTeamSide(right?.team, right?.teamIndex ?? 1, "right", activeIndex === (right?.teamIndex ?? -1))}
     `;
   }
 
-  function renderOverlayMulti(teamCount, teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam) {
+  function renderOverlayMulti(teamCount, entries, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam) {
     const layoutClass = teamCount === 3 ? "overlay--3" : "overlay--4";
     overlayRoot.className = `overlay ${layoutClass}`;
     overlayRoot.innerHTML = `
       <header class="overlay__info" aria-label="試合状況">
-        ${renderSetScores(teams, "info")}
+        ${renderSetScores(entries, "info")}
         ${renderThrowBlock(activeTeam)}
         ${renderWaitingBlock(state, winnerTeam, matchWinnerTeam)}
       </header>
       <div class="overlay__teams">
-        ${teams.map((team, index) => renderTeamCard(team, index, activeIndex === index)).join("")}
+        ${entries.map((entry) => renderTeamCard(entry.team, entry.teamIndex, activeIndex === entry.teamIndex)).join("")}
       </div>
     `;
   }
 
-  function applyScoreAnimations(teams, settings) {
-    const nextScores = teams.map((team) => (team ? team.score : 0));
+  function applyScoreAnimations(entries, settings) {
+    const scoreByTeamIndex = {};
+    entries.forEach((entry) => {
+      scoreByTeamIndex[entry.teamIndex] = entry.team ? entry.team.score : 0;
+    });
 
     if (!settings.scoreAnimation) {
-      prevScores = nextScores;
+      prevScores = scoreByTeamIndex;
       return;
     }
 
-    teams.forEach((team, index) => {
-      if (!team || prevScores.length === 0) return;
-      if (prevScores[index] === team.score) return;
+    entries.forEach((entry) => {
+      if (!entry.team || !prevScores || typeof prevScores !== "object") return;
+      if (prevScores[entry.teamIndex] === entry.team.score) return;
 
-      const section = overlayRoot.querySelector(`[data-team-index="${index}"]`);
+      const section = overlayRoot.querySelector(`[data-team-index="${entry.teamIndex}"]`);
       const scoreEl = section?.querySelector(".team__score");
       if (!scoreEl) return;
 
@@ -356,7 +407,7 @@
       );
     });
 
-    prevScores = nextScores;
+    prevScores = scoreByTeamIndex;
   }
 
   function renderOverlay(state) {
@@ -365,28 +416,29 @@
     renderMetaBar(state, settings);
 
     const teamCount = resolveTeamCount(state);
-    const teams = getTeams(state, teamCount);
+    const entries = getOrderedEntries(state, teamCount);
     const activeIndex =
       state.matchEnded || state.setEnded ? -1 : state.activeTeamIndex;
-    const activeTeam = activeIndex >= 0 ? teams[activeIndex] : null;
+    const activeTeam =
+      activeIndex >= 0 ? (state.teams || [])[activeIndex] || null : null;
     const winnerTeam =
       state.setEnded && state.setWinnerIndex !== null && state.setWinnerIndex !== undefined
-        ? teams[state.setWinnerIndex]
+        ? (state.teams || [])[state.setWinnerIndex]
         : null;
     const matchWinnerTeam =
       state.matchEnded &&
       state.matchWinnerIndex !== null &&
       state.matchWinnerIndex !== undefined
-        ? teams[state.matchWinnerIndex]
+        ? (state.teams || [])[state.matchWinnerIndex]
         : null;
 
     if (teamCount === 2) {
-      renderOverlayTwo(teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
+      renderOverlayTwo(entries, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
     } else {
-      renderOverlayMulti(teamCount, teams, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
+      renderOverlayMulti(teamCount, entries, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
     }
 
-    applyScoreAnimations(teams, settings);
+    applyScoreAnimations(entries, settings);
   }
 
   function applyState(state) {

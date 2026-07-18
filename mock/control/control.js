@@ -2,6 +2,8 @@
  * SMAScore Control — 失格・セット/試合終了・修正モード・Firebase同期
  */
 (function () {
+  const ThrowOrder = window.SMAScoreThrowOrder;
+
   const inputDisplay = document.getElementById("inputDisplay");
   const inputDisplayLabel = document.querySelector(".input-display__label");
   const teamNameEl = document.getElementById("teamName");
@@ -18,8 +20,7 @@
   const editModeBtn = document.getElementById("editModeBtn");
   const historyPanel = document.getElementById("historyPanel");
   const historyListEl = document.getElementById("historyList");
-  const setScoreLeftEl = document.getElementById("setScoreLeft");
-  const setScoreRightEl = document.getElementById("setScoreRight");
+  const setScoreEl = document.getElementById("setScore");
   const keys = document.querySelectorAll(".key[data-value]");
   const settingsBtn = document.querySelector(".header__settings");
   const controlEl = document.querySelector(".control");
@@ -36,8 +37,7 @@
   const settingsShowMatchInput = document.getElementById("settingsShowMatch");
   const settingsScoreAnimationInput = document.getElementById("settingsScoreAnimation");
   const throwOrderPanel = document.getElementById("throwOrderPanel");
-  const swapOrderBtn = document.getElementById("swapOrderBtn");
-  const throwOrderTeamsEl = document.getElementById("throwOrderTeams");
+  const throwOrderListEl = document.getElementById("throwOrderList");
 
   const matchConfig = window.SMAScoreMatchConfig?.load();
   if (!matchConfig) {
@@ -62,8 +62,9 @@
     setWins: 0,
   }));
 
-  let activeTeamIndex = 0;
-  let setStartTeamIndex = 0;
+  let throwOrder = ThrowOrder.createDefault(teams.length);
+  let activeTeamIndex = ThrowOrder.startIndexOf(throwOrder);
+  let setStartTeamIndex = ThrowOrder.startIndexOf(throwOrder);
   let pendingSelection = null;
   let setEnded = false;
   let setWinnerIndex = null;
@@ -78,6 +79,7 @@
   let settingsOpen = false;
   let isApplyingRemote = false;
   let suppressPublish = true;
+  let pendingPublish = false;
   let localRevision = 0;
 
   let overlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
@@ -98,6 +100,18 @@
     return selection;
   }
 
+  function syncStartFromOrder() {
+    setStartTeamIndex = ThrowOrder.startIndexOf(throwOrder);
+  }
+
+  function applyThrowOrder(nextOrder, options) {
+    throwOrder = ThrowOrder.normalize(nextOrder, teams.length);
+    syncStartFromOrder();
+    if (options?.resetActive !== false) {
+      activeTeamIndex = setStartTeamIndex;
+    }
+  }
+
   function cloneTeams() {
     return teams.map((team) => ({ ...team }));
   }
@@ -106,9 +120,14 @@
     return throwLog.map((entry) => ({ ...entry }));
   }
 
+  function cloneThrowOrder() {
+    return [...throwOrder];
+  }
+
   function snapshot() {
     return {
       teams: cloneTeams(),
+      throwOrder: cloneThrowOrder(),
       activeTeamIndex,
       setStartTeamIndex,
       setEnded,
@@ -122,8 +141,12 @@
   function restoreState(state) {
     teams.length = 0;
     state.teams.forEach((team) => teams.push({ ...team }));
+    throwOrder = ThrowOrder.normalize(state.throwOrder, teams.length);
+    if (!Array.isArray(state.throwOrder) && typeof state.setStartTeamIndex === "number") {
+      throwOrder = ThrowOrder.fromStartIndex(teams.length, state.setStartTeamIndex);
+    }
     activeTeamIndex = state.activeTeamIndex;
-    setStartTeamIndex = state.setStartTeamIndex;
+    setStartTeamIndex = ThrowOrder.startIndexOf(throwOrder);
     setEnded = state.setEnded;
     setWinnerIndex = state.setWinnerIndex;
     matchEnded = !!state.matchEnded;
@@ -141,14 +164,7 @@
   }
 
   function getNextActiveIndex(fromIndex) {
-    const total = teams.length;
-    for (let step = 1; step <= total; step += 1) {
-      const index = (fromIndex + step) % total;
-      if (!teams[index].disqualified) {
-        return index;
-      }
-    }
-    return fromIndex;
+    return ThrowOrder.getNextActiveIndex(throwOrder, fromIndex, teams);
   }
 
   function applyFiftyRule(score) {
@@ -210,14 +226,11 @@
   }
 
   function rotateSetStartTeam() {
-    if (teams.length === 2) {
-      setStartTeamIndex = 1 - setStartTeamIndex;
-    } else {
-      setStartTeamIndex = (setStartTeamIndex + 1) % teams.length;
-    }
+    applyThrowOrder(ThrowOrder.rotateForNextSet(throwOrder));
   }
 
   function beginSet() {
+    syncStartFromOrder();
     activeTeamIndex = setStartTeamIndex;
     setEnded = false;
     setWinnerIndex = null;
@@ -293,17 +306,21 @@
 
     matchEnded = false;
     matchWinnerIndex = null;
-    setStartTeamIndex = 0;
+    applyThrowOrder(ThrowOrder.createDefault(teams.length));
     beginSet();
 
     for (let i = 0; i < log.length; i += 1) {
       const entry = log[i];
 
       if (isOrderEntry(entry)) {
-        activeTeamIndex = entry.activeTeamIndex;
-        if (entry.setStartTeamIndex !== undefined && entry.setStartTeamIndex !== null) {
-          setStartTeamIndex = entry.setStartTeamIndex;
+        if (Array.isArray(entry.throwOrder)) {
+          applyThrowOrder(entry.throwOrder, { resetActive: false });
+        } else if (entry.setStartTeamIndex !== undefined && entry.setStartTeamIndex !== null) {
+          applyThrowOrder(ThrowOrder.fromStartIndex(teams.length, entry.setStartTeamIndex), {
+            resetActive: false,
+          });
         }
+        activeTeamIndex = entry.activeTeamIndex;
         continue;
       }
 
@@ -414,10 +431,27 @@
   }
 
   function renderSetHeader() {
-    if (teams.length >= 2) {
-      setScoreLeftEl.textContent = teams[0].setWins;
-      setScoreRightEl.textContent = teams[1].setWins;
-    }
+    if (!setScoreEl) return;
+
+    const divider = teams.length === 2
+      ? '<span class="header__set-divider">-</span>'
+      : '<span class="header__set-divider header__set-divider--bar">|</span>';
+
+    setScoreEl.innerHTML = throwOrder
+      .map((teamIndex, position) => {
+        const team = teams[teamIndex];
+        const name = team?.name ?? `チーム ${teamIndex + 1}`;
+        const wins = team?.setWins ?? 0;
+        const item = `
+          <span class="header__set-item header__set-item--color-${teamIndex}">
+            <span class="header__set-team">${name}</span>
+            <span class="header__set-num">${wins}</span>
+            <span class="header__set-unit">セット</span>
+          </span>
+        `;
+        return position === 0 ? item : `${divider}${item}`;
+      })
+      .join("");
   }
 
   function renderMetaHeader() {
@@ -437,18 +471,19 @@
   function renderTeamBoard() {
     teamBoardEl.className = `team-board team-board--count-${teams.length}`;
 
-    teamBoardEl.innerHTML = teams
-      .map((team, index) => {
-        const isActive = !editMode && !setEnded && !matchEnded && index === activeTeamIndex;
-        const isSetWinner = setEnded && index === setWinnerIndex;
-        const isMatchWinner = matchEnded && index === matchWinnerIndex;
+    teamBoardEl.innerHTML = throwOrder
+      .map((teamIndex) => {
+        const team = teams[teamIndex];
+        const isActive = !editMode && !setEnded && !matchEnded && teamIndex === activeTeamIndex;
+        const isSetWinner = setEnded && teamIndex === setWinnerIndex;
+        const isMatchWinner = matchEnded && teamIndex === matchWinnerIndex;
         const victoryClass = team.won && !setEnded && !matchEnded ? " team-card__score--victory" : "";
         const dqBadge = team.disqualified
           ? '<span class="team-card__badge">失格</span>'
           : "<span></span>";
 
         return `
-          <article class="team-card team-card--color-${index}${isActive ? " team-card--active" : ""}${team.disqualified ? " team-card--disqualified" : ""}${isSetWinner ? " team-card--set-winner" : ""}${isMatchWinner ? " team-card--match-winner" : ""}" aria-label="${team.name}">
+          <article class="team-card team-card--color-${teamIndex}${isActive ? " team-card--active" : ""}${team.disqualified ? " team-card--disqualified" : ""}${isSetWinner ? " team-card--set-winner" : ""}${isMatchWinner ? " team-card--match-winner" : ""}" data-team-index="${teamIndex}" aria-label="${team.name}">
             <div class="team-card__meta">
               <p class="team-card__name">${team.name}</p>
               ${dqBadge}
@@ -468,37 +503,38 @@
   }
 
   function renderThrowOrderPanel() {
-    if (!throwOrderPanel || !swapOrderBtn) return;
+    if (!throwOrderPanel || !throwOrderListEl) return;
 
     const blocked = matchEnded || setEnded || editMode || settingsOpen;
     throwOrderPanel.hidden = blocked;
+    if (blocked) return;
 
-    if (teams.length === 2) {
-      swapOrderBtn.hidden = false;
-      swapOrderBtn.textContent = "先攻・後攻を入れ替える";
-      if (throwOrderTeamsEl) throwOrderTeamsEl.hidden = true;
-      swapOrderBtn.disabled = blocked;
-      return;
-    }
-
-    swapOrderBtn.hidden = true;
-    if (!throwOrderTeamsEl) return;
-
-    throwOrderTeamsEl.hidden = blocked;
-    throwOrderTeamsEl.innerHTML = teams
-      .map((team, index) => {
-        const disabled = blocked || team.disqualified || index === activeTeamIndex;
+    throwOrderListEl.innerHTML = throwOrder
+      .map((teamIndex, position) => {
+        const team = teams[teamIndex];
+        const atFirst = position === 0;
+        const atLast = position === throwOrder.length - 1;
         return `
-          <button type="button" class="throw-order__team throw-order__team--color-${index}" data-team-index="${index}" ${disabled ? "disabled" : ""}>
-            ${team.name}
-          </button>
+          <div class="throw-order__row throw-order__row--color-${teamIndex}" data-team-index="${teamIndex}">
+            <span class="throw-order__pos">${position + 1}</span>
+            <span class="throw-order__name">${team.name}</span>
+            <div class="throw-order__actions">
+              <button type="button" class="throw-order__btn" data-action="front" ${atFirst ? "disabled" : ""}>先頭</button>
+              <button type="button" class="throw-order__btn" data-action="left" ${atFirst ? "disabled" : ""}>←</button>
+              <button type="button" class="throw-order__btn" data-action="right" ${atLast ? "disabled" : ""}>→</button>
+            </div>
+          </div>
         `;
       })
       .join("");
 
-    throwOrderTeamsEl.querySelectorAll(".throw-order__team").forEach((button) => {
+    throwOrderListEl.querySelectorAll(".throw-order__btn").forEach((button) => {
       button.addEventListener("click", () => {
-        changeThrowOrder(Number(button.dataset.teamIndex));
+        const row = button.closest("[data-team-index]");
+        const teamIndex = Number(row?.dataset.teamIndex);
+        const action = button.dataset.action;
+        if (Number.isNaN(teamIndex) || !action) return;
+        changeThrowOrderByAction(teamIndex, action);
       });
     });
   }
@@ -763,6 +799,7 @@
       format: META.format,
       teamCount: META.teamCount,
       teams: cloneTeams(),
+      throwOrder: cloneThrowOrder(),
       activeTeamIndex,
       setStartTeamIndex,
       setEnded,
@@ -796,8 +833,16 @@
     teams.length = 0;
     state.teams.forEach((team) => teams.push({ ...team }));
 
-    activeTeamIndex = state.activeTeamIndex ?? 0;
-    setStartTeamIndex = state.setStartTeamIndex ?? 0;
+    if (Array.isArray(state.throwOrder)) {
+      throwOrder = ThrowOrder.normalize(state.throwOrder, teams.length);
+    } else if (typeof state.setStartTeamIndex === "number") {
+      throwOrder = ThrowOrder.fromStartIndex(teams.length, state.setStartTeamIndex);
+    } else {
+      throwOrder = ThrowOrder.createDefault(teams.length);
+    }
+    syncStartFromOrder();
+
+    activeTeamIndex = state.activeTeamIndex ?? setStartTeamIndex;
     setEnded = !!state.setEnded;
     setWinnerIndex = state.setWinnerIndex ?? null;
     matchEnded = !!state.matchEnded;
@@ -822,11 +867,18 @@
   }
 
   function publishSync() {
-    if (isApplyingRemote || suppressPublish || !window.SMAScoreSync) return;
+    if (isApplyingRemote || !window.SMAScoreSync) return;
+    if (suppressPublish) {
+      pendingPublish = true;
+      return;
+    }
+    pendingPublish = false;
+    publishSyncWithRetry(buildSyncState(), localRevision, 3);
+  }
 
-    const baseRevision = localRevision;
-    const state = buildSyncState();
-    localRevision = baseRevision + 1;
+  function publishSyncWithRetry(state, baseRevision, attemptsLeft) {
+    const pendingRevision = baseRevision + 1;
+    localRevision = pendingRevision;
 
     SMAScoreSync.publish(state, { baseRevision }).then((result) => {
       if (result?.committed && result.data) {
@@ -835,8 +887,18 @@
       }
 
       if (result?.conflict && result.remote) {
-        applySyncState(result.remote);
-        return;
+        const remoteRevision = SMAScoreSync.getRevision(result.remote);
+        if (attemptsLeft > 0 && remoteRevision >= pendingRevision) {
+          // より新しい remote がある場合は、現行メモリ状態を新しい base で再送
+          publishSyncWithRetry(buildSyncState(), remoteRevision, attemptsLeft - 1);
+          return;
+        }
+
+        if (remoteRevision > baseRevision) {
+          localRevision = Math.max(0, remoteRevision - 1);
+          applySyncState(result.remote);
+          return;
+        }
       }
 
       localRevision = baseRevision;
@@ -946,38 +1008,52 @@
     renderAll();
   }
 
-  function changeThrowOrder(nextIndex) {
-    if (matchEnded || setEnded || editMode || settingsOpen) return;
-    if (nextIndex < 0 || nextIndex >= teams.length) return;
-    if (teams[nextIndex].disqualified) return;
-    if (nextIndex === activeTeamIndex) return;
-
-    const currentName = getActiveTeam().name;
-    const nextName = teams[nextIndex].name;
-    const ok = window.confirm(
-      `投擲順を変更します。\n現在: ${currentName}\n変更後: ${nextName}\n\nよろしいですか？`
-    );
-    if (!ok) return;
+  function pushOrderChange(nextOrder) {
+    const normalized = ThrowOrder.normalize(nextOrder, teams.length);
+    const same =
+      normalized.length === throwOrder.length &&
+      normalized.every((value, index) => value === throwOrder[index]);
+    if (same) return;
 
     history.push(snapshot());
-
-    activeTeamIndex = nextIndex;
-    if (teams.length === 2) {
-      setStartTeamIndex = activeTeamIndex;
-    }
+    applyThrowOrder(normalized);
+    pendingSelection = null;
 
     throwLog.push({
       kind: "order",
       activeTeamIndex,
       setStartTeamIndex,
+      throwOrder: cloneThrowOrder(),
     });
 
-    pendingSelection = null;
     renderAll();
   }
 
-  function swapThrowOrderTwoTeam() {
-    changeThrowOrder(1 - activeTeamIndex);
+  function changeThrowOrderByAction(teamIndex, action) {
+    if (matchEnded || setEnded || editMode || settingsOpen) return;
+    if (teamIndex < 0 || teamIndex >= teams.length) return;
+    if (teams[teamIndex].disqualified) return;
+
+    let nextOrder = cloneThrowOrder();
+    if (action === "front") {
+      nextOrder = ThrowOrder.moveToFront(nextOrder, teamIndex);
+    } else if (action === "left") {
+      nextOrder = ThrowOrder.move(nextOrder, teamIndex, -1);
+    } else if (action === "right") {
+      nextOrder = ThrowOrder.move(nextOrder, teamIndex, 1);
+    } else {
+      return;
+    }
+
+    const label = teams[teamIndex]?.name ?? `チーム ${teamIndex + 1}`;
+    const actionLabel =
+      action === "front" ? "先頭にする" : action === "left" ? "1つ前へ" : "1つ後ろへ";
+    const ok = window.confirm(
+      `投擲順を変更します。\n${label} を${actionLabel}\n\nよろしいですか？`
+    );
+    if (!ok) return;
+
+    pushOrderChange(nextOrder);
   }
 
   function back() {
@@ -1019,7 +1095,6 @@
   backBtn.addEventListener("click", back);
   nextSetBtn.addEventListener("click", nextSet);
   editModeBtn.addEventListener("click", toggleEditMode);
-  swapOrderBtn?.addEventListener("click", swapThrowOrderTwoTeam);
 
   settingsBtn.addEventListener("click", openSettings);
   settingsCloseBtn.addEventListener("click", closeSettings);
@@ -1056,6 +1131,9 @@
     }
 
     suppressPublish = false;
+    if (pendingPublish) {
+      publishSync();
+    }
   }
 
   bootstrap();

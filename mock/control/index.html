@@ -30,13 +30,9 @@
               <span class="header__format" id="formatLabel"></span>
             </span>
           </div>
-          <div class="header__set">
+          <div class="header__set" aria-label="セット数">
             <span class="header__set-label">SET</span>
-            <span class="header__set-score">
-              <span class="header__set-num header__set-num--left" id="setScoreLeft">0</span>
-              <span class="header__set-divider">-</span>
-              <span class="header__set-num header__set-num--right" id="setScoreRight">0</span>
-            </span>
+            <span class="header__set-score" id="setScore"></span>
           </div>
         </div>
       </header>
@@ -49,8 +45,8 @@
       </div>
 
       <div class="throw-order" id="throwOrderPanel">
-        <button class="throw-order__swap" type="button" id="swapOrderBtn">先攻・後攻を入れ替える</button>
-        <div class="throw-order__teams" id="throwOrderTeams" hidden></div>
+        <p class="throw-order__title">投擲順（左が先攻）</p>
+        <div class="throw-order__list" id="throwOrderList"></div>
       </div>
 
       <section class="input-display" aria-label="現在入力">
@@ -172,6 +168,7 @@
   <script src="../shared/firebase.js"></script>
   <script src="../shared/matchConfig.js"></script>
   <script src="../shared/matchRules.js"></script>
+  <script src="../shared/throwOrder.js"></script>
   <script src="../shared/overlaySettings.js"></script>
   <script src="../shared/sync.js"></script>
   <script src="control.js"></script>
