@@ -5,7 +5,6 @@
   const ThrowOrder = window.SMAScoreThrowOrder;
 
   const inputDisplay = document.getElementById("inputDisplay");
-  const inputDisplayLabel = document.querySelector(".input-display__label");
   const teamNameEl = document.getElementById("teamName");
   const tournamentNameEl = document.getElementById("tournamentName");
   const matchNameEl = document.getElementById("matchName");
@@ -21,7 +20,8 @@
   const historyPanel = document.getElementById("historyPanel");
   const historyListEl = document.getElementById("historyList");
   const setScoreEl = document.getElementById("setScore");
-  const keys = document.querySelectorAll(".key[data-value]");
+  const keys = document.querySelectorAll("#keypad .key[data-value]");
+  const editKeys = document.querySelectorAll("#editKeypad .key[data-value]");
   const settingsBtn = document.querySelector(".header__settings");
   const controlEl = document.querySelector(".control");
   const settingsModal = document.getElementById("settingsModal");
@@ -38,6 +38,14 @@
   const settingsScoreAnimationInput = document.getElementById("settingsScoreAnimation");
   const throwOrderPanel = document.getElementById("throwOrderPanel");
   const throwOrderListEl = document.getElementById("throwOrderList");
+  const inputViewEl = document.getElementById("inputView");
+  const editViewEl = document.getElementById("editView");
+  const editInputDisplay = document.getElementById("editInputDisplay");
+  const editSummaryValue = document.getElementById("editSummaryValue");
+  const editKeypadEl = document.getElementById("editKeypad");
+  const cancelEditBtn = document.getElementById("cancelEditBtn");
+  const inputDisplayLabel = document.querySelector("#inputView .input-display__label");
+  const editInputDisplayLabel = document.querySelector("#editView .input-display__label");
 
   const matchConfig = window.SMAScoreMatchConfig?.load();
   if (!matchConfig) {
@@ -77,6 +85,7 @@
   let throwOrder = ThrowOrder.createDefault(teams.length);
   let activeTeamIndex = ThrowOrder.startIndexOf(throwOrder);
   let setStartTeamIndex = ThrowOrder.startIndexOf(throwOrder);
+  let currentSetNumber = 1;
   let pendingSelection = null;
   let setEnded = false;
   let setWinnerIndex = null;
@@ -85,7 +94,8 @@
   const history = [];
   const throwLog = [];
 
-  let editMode = false;
+  /** "input" = 通常入力画面, "edit" = 修正画面 */
+  let viewMode = "input";
   let selectedEditIndex = null;
   let pendingEditSelection = null;
   let settingsOpen = false;
@@ -93,6 +103,10 @@
   let suppressPublish = true;
   let pendingPublish = false;
   let localRevision = 0;
+  /** 折りたたみ中の過去セット番号 */
+  const collapsedSets = new Set();
+
+  const isEditMode = () => viewMode === "edit";
 
   let overlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
     showTournament: true,
@@ -142,6 +156,7 @@
       throwOrder: cloneThrowOrder(),
       activeTeamIndex,
       setStartTeamIndex,
+      currentSetNumber,
       setEnded,
       setWinnerIndex,
       matchEnded,
@@ -159,6 +174,7 @@
     }
     activeTeamIndex = state.activeTeamIndex;
     setStartTeamIndex = ThrowOrder.startIndexOf(throwOrder);
+    currentSetNumber = state.currentSetNumber || 1;
     setEnded = state.setEnded;
     setWinnerIndex = state.setWinnerIndex;
     matchEnded = !!state.matchEnded;
@@ -249,6 +265,12 @@
     resetSetScores();
   }
 
+  function countThrowsInSet(setNumber) {
+    return throwLog.filter(
+      (entry) => !isOrderEntry(entry) && (entry.setIndex || 1) === setNumber
+    ).length;
+  }
+
   function finishMatch(winnerIndex) {
     matchEnded = true;
     matchWinnerIndex = winnerIndex;
@@ -272,6 +294,7 @@
     }
 
     rotateSetStartTeam();
+    currentSetNumber += 1;
     beginSet();
   }
 
@@ -318,11 +341,16 @@
 
     matchEnded = false;
     matchWinnerIndex = null;
+    currentSetNumber = 1;
     applyThrowOrder(ThrowOrder.createDefault(teams.length));
     beginSet();
 
+    let setNumber = 1;
+    let throwInSet = 0;
+
     for (let i = 0; i < log.length; i += 1) {
       const entry = log[i];
+      entry.setIndex = setNumber;
 
       if (isOrderEntry(entry)) {
         if (Array.isArray(entry.throwOrder)) {
@@ -333,9 +361,14 @@
           });
         }
         activeTeamIndex = entry.activeTeamIndex;
+        entry.throwInSet = null;
+        entry.setEnded = false;
+        entry.setWinnerIndex = null;
         continue;
       }
 
+      throwInSet += 1;
+      entry.throwInSet = throwInSet;
       activeTeamIndex = entry.teamIndex;
       const team = teams[entry.teamIndex];
 
@@ -348,11 +381,22 @@
         addCurrentScoresToTotals();
         setEnded = true;
         setWinnerIndex = result.winnerIndex;
+        entry.setEnded = true;
+        entry.setWinnerIndex = result.winnerIndex;
 
         if (i < log.length - 1) {
           applyNextSetTransition(result.winnerIndex);
-          if (matchEnded) break;
+          if (matchEnded) {
+            // 試合終了後の余剰ログは破棄
+            log.length = i + 1;
+            break;
+          }
+          setNumber = currentSetNumber;
+          throwInSet = 0;
         }
+      } else {
+        entry.setEnded = false;
+        entry.setWinnerIndex = null;
       }
     }
 
@@ -364,6 +408,7 @@
 
     throwLog.length = 0;
     log.forEach((entry) => throwLog.push({ ...entry }));
+    currentSetNumber = setNumber;
   }
 
   function endSet(winnerIndex) {
@@ -486,7 +531,7 @@
     teamBoardEl.innerHTML = throwOrder
       .map((teamIndex) => {
         const team = teams[teamIndex];
-        const isActive = !editMode && !setEnded && !matchEnded && teamIndex === activeTeamIndex;
+        const isActive = !isEditMode() && !setEnded && !matchEnded && teamIndex === activeTeamIndex;
         const isSetWinner = setEnded && teamIndex === setWinnerIndex;
         const isMatchWinner = matchEnded && teamIndex === matchWinnerIndex;
         const victoryClass = team.won && !setEnded && !matchEnded ? " team-card__score--victory" : "";
@@ -517,7 +562,7 @@
   function renderThrowOrderPanel() {
     if (!throwOrderPanel || !throwOrderListEl) return;
 
-    const blocked = matchEnded || setEnded || editMode || settingsOpen;
+    const blocked = matchEnded || setEnded || isEditMode() || settingsOpen;
     throwOrderPanel.hidden = blocked;
     if (blocked) return;
 
@@ -551,28 +596,124 @@
     });
   }
 
-  function renderHistoryList() {
-    if (!editMode) return;
+  function buildHistoryGroups() {
+    const groups = [];
+    let current = {
+      setNumber: 1,
+      winnerIndex: null,
+      closed: false,
+      entries: [],
+    };
 
-    if (throwLog.length === 0) {
+    throwLog.forEach((entry, index) => {
+      const setIndex = entry.setIndex || current.setNumber;
+      if (setIndex !== current.setNumber) {
+        if (current.entries.length > 0 || current.closed) {
+          groups.push(current);
+        }
+        current = {
+          setNumber: setIndex,
+          winnerIndex: null,
+          closed: false,
+          entries: [],
+        };
+      }
+
+      current.entries.push({ index, entry });
+
+      if (entry.setEnded) {
+        current.winnerIndex = entry.setWinnerIndex ?? null;
+        current.closed = true;
+        groups.push(current);
+        current = {
+          setNumber: setIndex + 1,
+          winnerIndex: null,
+          closed: false,
+          entries: [],
+        };
+      }
+    });
+
+    if (!current.closed) {
+      groups.push(current);
+    }
+
+    if (groups.length === 0) {
+      groups.push({
+        setNumber: currentSetNumber || 1,
+        winnerIndex: null,
+        closed: false,
+        entries: [],
+      });
+    }
+
+    return groups;
+  }
+
+  function renderHistoryList() {
+    if (!isEditMode()) {
+      historyListEl.innerHTML = "";
+      return;
+    }
+
+    const groups = buildHistoryGroups();
+    if (groups.every((group) => group.entries.length === 0)) {
       historyListEl.innerHTML = '<p class="history-list__empty">履歴がありません</p>';
       return;
     }
 
-    historyListEl.innerHTML = throwLog
-      .map((entry, index) => {
-        const formatted = formatHistoryEntry(entry);
-        const selected = index === selectedEditIndex ? " history-item--selected" : "";
+    historyListEl.innerHTML = groups
+      .map((group) => {
+        const isCurrent = !group.closed;
+        const winnerName =
+          group.winnerIndex !== null && group.winnerIndex !== undefined
+            ? teams[group.winnerIndex]?.name ?? `チーム ${group.winnerIndex + 1}`
+            : null;
+        const meta = isCurrent
+          ? "現在進行中"
+          : winnerName
+            ? `${winnerName}勝利`
+            : "セット終了";
+        const collapsed = !isCurrent && collapsedSets.has(group.setNumber);
+        const items = group.entries
+          .map(({ index, entry }) => {
+            const formatted = formatHistoryEntry(entry);
+            const selected = index === selectedEditIndex ? " history-item--selected" : "";
+            const orderClass = isOrderEntry(entry) ? " history-item--order" : "";
+            const throwLabel = isOrderEntry(entry)
+              ? "順序"
+              : `${entry.throwInSet || "-"}投目`;
+            return `
+              <button type="button" class="history-item${selected}${orderClass}" data-index="${index}">
+                <span class="history-item__num">${throwLabel}</span>
+                <span class="history-item__team">${formatted.teamName}</span>
+                <span class="history-item__input">${formatted.input}</span>
+                <span class="history-item__score">${formatted.score}</span>
+              </button>
+            `;
+          })
+          .join("");
+
         return `
-          <button type="button" class="history-item${selected}" data-index="${index}">
-            <span class="history-item__num">${index + 1}</span>
-            <span class="history-item__team">${formatted.teamName}</span>
-            <span class="history-item__input">${formatted.input}</span>
-            <span class="history-item__score">${formatted.score}</span>
-          </button>
+          <section class="history-set${collapsed ? " history-set--collapsed" : ""}${isCurrent ? " history-set--current" : ""}" data-set-number="${group.setNumber}">
+            <button type="button" class="history-set__header" data-set-toggle="${group.setNumber}">
+              <span class="history-set__title">セット${group.setNumber}</span>
+              <span class="history-set__meta">${meta}${collapsed ? " ▸" : " ▾"}</span>
+            </button>
+            <div class="history-set__body">${items || '<p class="history-list__empty">投擲なし</p>'}</div>
+          </section>
         `;
       })
       .join("");
+
+    historyListEl.querySelectorAll("[data-set-toggle]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const setNumber = Number(button.dataset.setToggle);
+        if (collapsedSets.has(setNumber)) collapsedSets.delete(setNumber);
+        else collapsedSets.add(setNumber);
+        renderHistoryList();
+      });
+    });
 
     historyListEl.querySelectorAll(".history-item").forEach((button) => {
       button.addEventListener("click", () => {
@@ -584,7 +725,7 @@
   }
 
   function renderInputTeamBanner() {
-    if (setEnded || matchEnded || editMode) {
+    if (setEnded || matchEnded || isEditMode()) {
       inputTeamBanner.classList.add("input-team--hidden");
       return;
     }
@@ -593,6 +734,46 @@
     const colorIndex = activeTeamIndex % 4;
     inputTeamBanner.className = `input-team input-team--color-${colorIndex}`;
     teamNameEl.textContent = getActiveTeam().name;
+  }
+
+  function selectionToKeyValue(selection) {
+    if (selection === "F") return "F";
+    if (selection === "miss") return "miss";
+    if (selection === 0) return "0";
+    if (selection === null || selection === undefined) return null;
+    return String(selection);
+  }
+
+  function renderKeySelection(keyNodeList, selection) {
+    const selectedValue = selectionToKeyValue(selection);
+    keyNodeList.forEach((key) => {
+      key.classList.toggle("key--selected", selectedValue !== null && key.dataset.value === selectedValue);
+    });
+  }
+
+  function renderEditSummary() {
+    if (!editSummaryValue) return;
+
+    if (selectedEditIndex === null) {
+      editSummaryValue.textContent = "履歴から投擲を選択";
+      return;
+    }
+
+    const entry = throwLog[selectedEditIndex];
+    if (!entry) {
+      editSummaryValue.textContent = "履歴から投擲を選択";
+      return;
+    }
+
+    if (isOrderEntry(entry)) {
+      const name = teams[entry.activeTeamIndex]?.name ?? `チーム ${entry.activeTeamIndex + 1}`;
+      editSummaryValue.textContent = `セット${entry.setIndex || "?"} / 順序変更 → ${name}`;
+      return;
+    }
+
+    const name = teams[entry.teamIndex]?.name ?? `チーム ${entry.teamIndex + 1}`;
+    const current = pendingEditSelection !== null ? pendingEditSelection : entry.selection;
+    editSummaryValue.textContent = `セット${entry.setIndex || "?"} / ${entry.throwInSet || "?"}投目 / ${name} / 現在 ${formatSelection(current)}`;
   }
 
   function renderInputDisplay() {
@@ -605,38 +786,7 @@
       "input-display__value--edit"
     );
 
-    if (editMode) {
-      inputDisplayLabel.textContent = "修正入力";
-
-      if (selectedEditIndex === null) {
-        inputDisplay.textContent = "履歴を選択";
-        inputDisplay.classList.add("input-display__value--edit");
-        return;
-      }
-
-      if (isOrderEntry(throwLog[selectedEditIndex])) {
-        inputDisplay.textContent = "順序変更";
-        inputDisplay.classList.add("input-display__value--edit");
-        return;
-      }
-
-      if (pendingEditSelection === null) {
-        inputDisplay.textContent = formatSelection(throwLog[selectedEditIndex].selection);
-        inputDisplay.classList.add("input-display__value--entered");
-        return;
-      }
-
-      if (pendingEditSelection === "F") {
-        inputDisplay.textContent = "F";
-        inputDisplay.classList.add("input-display__value--foul");
-      } else {
-        inputDisplay.textContent = formatSelection(pendingEditSelection);
-        inputDisplay.classList.add("input-display__value--entered");
-      }
-      return;
-    }
-
-    inputDisplayLabel.textContent = "現在入力";
+    if (inputDisplayLabel) inputDisplayLabel.textContent = "現在入力";
 
     if (matchEnded) {
       inputDisplay.textContent = "試合終了";
@@ -665,32 +815,96 @@
     }
   }
 
-  function renderControls() {
-    editModeBtn.classList.toggle("action--edit-on", editMode);
-    editModeBtn.textContent = editMode ? "通常モード" : "修正モード";
-    historyPanel.hidden = !editMode;
+  function renderEditInputDisplay() {
+    if (!editInputDisplay) return;
 
-    const inputBlocked = setEnded || matchEnded || editMode || settingsOpen;
-    keypadEl.classList.toggle("keypad--disabled", inputBlocked && !(editMode && selectedEditIndex !== null));
+    editInputDisplay.classList.remove(
+      "input-display__value--waiting",
+      "input-display__value--entered",
+      "input-display__value--foul",
+      "input-display__value--edit"
+    );
+
+    if (editInputDisplayLabel) editInputDisplayLabel.textContent = "修正入力";
+
+    if (selectedEditIndex === null) {
+      editInputDisplay.textContent = "履歴を選択";
+      editInputDisplay.classList.add("input-display__value--edit");
+      return;
+    }
+
+    if (isOrderEntry(throwLog[selectedEditIndex])) {
+      editInputDisplay.textContent = "順序変更は修正不可";
+      editInputDisplay.classList.add("input-display__value--edit");
+      return;
+    }
+
+    if (pendingEditSelection === null) {
+      editInputDisplay.textContent = formatSelection(throwLog[selectedEditIndex].selection);
+      editInputDisplay.classList.add("input-display__value--entered");
+      return;
+    }
+
+    if (pendingEditSelection === "F") {
+      editInputDisplay.textContent = "F";
+      editInputDisplay.classList.add("input-display__value--foul");
+    } else {
+      editInputDisplay.textContent = formatSelection(pendingEditSelection);
+      editInputDisplay.classList.add("input-display__value--entered");
+    }
+  }
+
+  function renderViewMode() {
+    const editing = isEditMode();
+    controlEl.classList.toggle("control--edit-mode", editing);
+    controlEl.classList.toggle("control--input-mode", !editing);
+
+    if (inputViewEl) inputViewEl.hidden = editing;
+    if (editViewEl) editViewEl.hidden = !editing;
+
+    editModeBtn.textContent = editing ? "通常入力へ" : "修正画面へ";
+    editModeBtn.classList.toggle("action--edit-on", editing);
+  }
+
+  function renderControls() {
+    renderViewMode();
+
+    const editing = isEditMode();
+    const orderEntry =
+      selectedEditIndex !== null && isOrderEntry(throwLog[selectedEditIndex]);
+
+    historyPanel?.toggleAttribute?.("hidden", false);
+
+    keypadEl.classList.toggle("keypad--disabled", setEnded || matchEnded || settingsOpen);
+    editKeypadEl?.classList.toggle(
+      "keypad--disabled",
+      settingsOpen || selectedEditIndex === null || orderEntry
+    );
 
     editModeBtn.disabled = settingsOpen || matchEnded;
 
-    if (editMode) {
+    backBtn.hidden = editing;
+    cancelEditBtn.hidden = !editing;
+    cancelEditBtn.disabled = settingsOpen || selectedEditIndex === null;
+
+    if (editing) {
       nextSetBtn.hidden = true;
       confirmBtn.hidden = false;
-      const orderEntry = selectedEditIndex !== null && isOrderEntry(throwLog[selectedEditIndex]);
+      confirmBtn.textContent = "修正確定";
       confirmBtn.disabled =
         settingsOpen || selectedEditIndex === null || orderEntry || pendingEditSelection === null;
     } else {
       confirmBtn.hidden = setEnded || matchEnded;
-      confirmBtn.disabled = settingsOpen || setEnded || matchEnded;
+      confirmBtn.disabled = settingsOpen || setEnded || matchEnded || pendingSelection === null;
       confirmBtn.textContent = "決定";
       nextSetBtn.hidden = !setEnded || matchEnded;
       nextSetBtn.disabled = settingsOpen || matchEnded;
     }
 
-    backBtn.disabled = history.length === 0 || settingsOpen;
+    backBtn.disabled = editing || history.length === 0 || settingsOpen;
     renderThrowOrderPanel();
+    renderKeySelection(keys, editing ? null : pendingSelection);
+    renderKeySelection(editKeys, editing ? pendingEditSelection : null);
   }
 
   function renderSettingsTeamFields() {
@@ -824,7 +1038,8 @@
       setWinnerIndex,
       matchEnded,
       matchWinnerIndex,
-      pendingSelection: editMode ? pendingEditSelection : pendingSelection,
+      pendingSelection: isEditMode() ? pendingEditSelection : pendingSelection,
+      currentSetNumber,
       throwLog: cloneThrowLog(),
       overlaySettings,
       revision: localRevision,
@@ -865,6 +1080,7 @@
     syncStartFromOrder();
 
     activeTeamIndex = state.activeTeamIndex ?? setStartTeamIndex;
+    currentSetNumber = state.currentSetNumber || currentSetNumber || 1;
     setEnded = !!state.setEnded;
     setWinnerIndex = state.setWinnerIndex ?? null;
     matchEnded = !!state.matchEnded;
@@ -944,6 +1160,8 @@
     renderSetHeader();
     renderInputTeamBanner();
     renderInputDisplay();
+    renderEditSummary();
+    renderEditInputDisplay();
     renderHistoryList();
     renderControls();
 
@@ -955,17 +1173,18 @@
   function selectValue(value) {
     if (settingsOpen || matchEnded) return;
 
-    if (editMode) {
+    if (isEditMode()) {
       if (selectedEditIndex === null || isOrderEntry(throwLog[selectedEditIndex])) return;
       pendingEditSelection = value === "miss" ? 0 : value;
-      renderInputDisplay();
+      renderEditSummary();
+      renderEditInputDisplay();
       renderControls();
       publishSync();
       return;
     }
 
     if (setEnded) return;
-    pendingSelection = value === "miss" ? "miss" : value;
+    pendingSelection = value === "miss" ? 0 : value;
     renderInputDisplay();
     renderControls();
     publishSync();
@@ -988,23 +1207,29 @@
   }
 
   function confirm() {
-    if (editMode) {
+    if (isEditMode()) {
       confirmEdit();
       return;
     }
 
     if (setEnded || matchEnded) return;
+    if (pendingSelection === null) return;
 
     const selection = normalizeSelection(pendingSelection);
 
     history.push(snapshot());
 
     const teamIndex = activeTeamIndex;
+    const throwInSet = countThrowsInSet(currentSetNumber) + 1;
     throwLog.push({
       kind: "throw",
       teamIndex,
       selection,
       scoreAfter: 0,
+      setIndex: currentSetNumber,
+      throwInSet,
+      setEnded: false,
+      setWinnerIndex: null,
     });
 
     applySelection(getActiveTeam(), selection);
@@ -1012,6 +1237,12 @@
     pendingSelection = null;
 
     resolveAfterThrow(teamIndex);
+
+    if (setEnded) {
+      throwLog[throwLog.length - 1].setEnded = true;
+      throwLog[throwLog.length - 1].setWinnerIndex = setWinnerIndex;
+    }
+
     renderAll();
   }
 
@@ -1035,6 +1266,7 @@
     }
 
     rotateSetStartTeam();
+    currentSetNumber += 1;
     beginSet();
     pendingSelection = null;
 
@@ -1057,13 +1289,17 @@
       activeTeamIndex,
       setStartTeamIndex,
       throwOrder: cloneThrowOrder(),
+      setIndex: currentSetNumber,
+      throwInSet: null,
+      setEnded: false,
+      setWinnerIndex: null,
     });
 
     renderAll();
   }
 
   function changeThrowOrderByAction(teamIndex, action) {
-    if (matchEnded || setEnded || editMode || settingsOpen) return;
+    if (matchEnded || setEnded || isEditMode() || settingsOpen) return;
     if (teamIndex < 0 || teamIndex >= teams.length) return;
     if (teams[teamIndex].disqualified) return;
 
@@ -1090,44 +1326,83 @@
   }
 
   function back() {
-    if (history.length === 0) return;
+    if (isEditMode() || history.length === 0) return;
 
+    const previousLog = cloneThrowLog();
     restoreState(history.pop());
-    pendingSelection = null;
+
+    let restoredSelection = null;
+    if (previousLog.length > throwLog.length) {
+      const undone = previousLog[previousLog.length - 1];
+      if (undone && !isOrderEntry(undone)) {
+        restoredSelection = undone.selection;
+      }
+    }
+
+    pendingSelection = restoredSelection;
     pendingEditSelection = null;
     selectedEditIndex = null;
+    renderAll();
+  }
+
+  function openEditView() {
+    viewMode = "edit";
+    selectedEditIndex = null;
+    pendingEditSelection = null;
+    collapsedSets.clear();
+    // 現在セット以外を折りたたみ
+    buildHistoryGroups().forEach((group) => {
+      if (group.closed) collapsedSets.add(group.setNumber);
+    });
+    renderAll();
+  }
+
+  function closeEditView() {
+    viewMode = "input";
+    selectedEditIndex = null;
+    pendingEditSelection = null;
+    historyListEl.innerHTML = "";
     renderAll();
   }
 
   function toggleEditMode() {
     if (settingsOpen || matchEnded) return;
+    if (isEditMode()) closeEditView();
+    else openEditView();
+  }
 
-    editMode = !editMode;
+  function cancelEditSelection() {
+    if (!isEditMode()) return;
     selectedEditIndex = null;
     pendingEditSelection = null;
-    pendingSelection = null;
     renderAll();
   }
 
-  keys.forEach((key) => {
-    key.addEventListener("click", () => {
-      const raw = key.dataset.value;
-      if (raw === "F") {
-        selectValue("F");
-        return;
-      }
-      if (raw === "miss") {
-        selectValue("miss");
-        return;
-      }
-      selectValue(Number(raw));
+  function bindKeyPad(nodeList) {
+    nodeList.forEach((key) => {
+      key.addEventListener("click", () => {
+        const raw = key.dataset.value;
+        if (raw === "F") {
+          selectValue("F");
+          return;
+        }
+        if (raw === "miss") {
+          selectValue("miss");
+          return;
+        }
+        selectValue(Number(raw));
+      });
     });
-  });
+  }
+
+  bindKeyPad(keys);
+  bindKeyPad(editKeys);
 
   confirmBtn.addEventListener("click", confirm);
   backBtn.addEventListener("click", back);
   nextSetBtn.addEventListener("click", nextSet);
   editModeBtn.addEventListener("click", toggleEditMode);
+  cancelEditBtn?.addEventListener("click", cancelEditSelection);
 
   settingsBtn.addEventListener("click", openSettings);
   settingsCloseBtn.addEventListener("click", closeSettings);
