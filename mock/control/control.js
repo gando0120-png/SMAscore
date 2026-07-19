@@ -44,6 +44,9 @@
   const editSummaryValue = document.getElementById("editSummaryValue");
   const editKeypadEl = document.getElementById("editKeypad");
   const cancelEditBtn = document.getElementById("cancelEditBtn");
+  const editControlsEl = document.getElementById("editControls");
+  const historyScrollEl = document.getElementById("historyScroll");
+  const inputEditCursorEl = document.getElementById("inputEditCursor");
   const inputDisplayLabel = document.querySelector("#inputView .input-display__label");
   const editInputDisplayLabel = document.querySelector("#editView .input-display__label");
 
@@ -96,6 +99,8 @@
 
   /** "input" = 通常入力画面, "edit" = 修正画面 */
   let viewMode = "input";
+  /** 過去投擲の修正カーソル。null = 最新地点（末尾追加モード） */
+  let editCursor = null;
   let selectedEditIndex = null;
   let pendingEditSelection = null;
   let settingsOpen = false;
@@ -107,6 +112,24 @@
   const collapsedSets = new Set();
 
   const isEditMode = () => viewMode === "edit";
+
+  function getEditableThrowIndices() {
+    const indices = [];
+    for (let i = 0; i < throwLog.length; i += 1) {
+      if (!isOrderEntry(throwLog[i])) indices.push(i);
+    }
+    return indices;
+  }
+
+  function isEditingPast() {
+    return editCursor !== null && editCursor >= 0 && editCursor < throwLog.length;
+  }
+
+  function clearEditCursor() {
+    editCursor = null;
+    selectedEditIndex = null;
+    pendingEditSelection = null;
+  }
 
   let overlaySettings = window.SMAScoreOverlaySettings?.load() ?? {
     showTournament: true,
@@ -347,6 +370,8 @@
 
     let setNumber = 1;
     let throwInSet = 0;
+    let truncated = false;
+    let droppedCount = 0;
 
     for (let i = 0; i < log.length; i += 1) {
       const entry = log[i];
@@ -387,7 +412,9 @@
         if (i < log.length - 1) {
           applyNextSetTransition(result.winnerIndex);
           if (matchEnded) {
-            // 試合終了後の余剰ログは破棄
+            // 試合終了後の余剰ログは適用不能として切り捨て候補にする
+            droppedCount = log.length - i - 1;
+            truncated = droppedCount > 0;
             log.length = i + 1;
             break;
           }
@@ -409,6 +436,8 @@
     throwLog.length = 0;
     log.forEach((entry) => throwLog.push({ ...entry }));
     currentSetNumber = setNumber;
+
+    return { truncated, droppedCount };
   }
 
   function endSet(winnerIndex) {
@@ -719,13 +748,21 @@
       button.addEventListener("click", () => {
         selectedEditIndex = Number(button.dataset.index);
         pendingEditSelection = null;
+        if (!isOrderEntry(throwLog[selectedEditIndex])) {
+          editCursor = selectedEditIndex;
+          pendingSelection = throwLog[selectedEditIndex]?.selection ?? null;
+        }
         renderAll();
+        // 選択後にキーパッドが見えるよう、選択項目をスクロール位置に寄せる
+        requestAnimationFrame(() => {
+          button.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        });
       });
     });
   }
 
   function renderInputTeamBanner() {
-    if (setEnded || matchEnded || isEditMode()) {
+    if (setEnded || matchEnded || isEditMode() || isEditingPast()) {
       inputTeamBanner.classList.add("input-team--hidden");
       return;
     }
@@ -786,15 +823,34 @@
       "input-display__value--edit"
     );
 
-    if (inputDisplayLabel) inputDisplayLabel.textContent = "現在入力";
+    if (inputDisplayLabel) inputDisplayLabel.textContent = isEditingPast() ? "修正入力" : "現在入力";
 
-    if (matchEnded) {
+    if (inputEditCursorEl) {
+      if (isEditingPast()) {
+        const entry = throwLog[editCursor];
+        const indices = getEditableThrowIndices();
+        const pos = indices.indexOf(editCursor);
+        const fromEnd = pos >= 0 ? indices.length - pos : 1;
+        const setLabel = entry?.setIndex ? `セット${entry.setIndex}` : "";
+        const throwLabel = entry?.throwInSet ? `${entry.throwInSet}投目` : "";
+        const detail = [setLabel, throwLabel].filter(Boolean).join("・");
+        inputEditCursorEl.hidden = false;
+        inputEditCursorEl.textContent = detail
+          ? `${fromEnd}投前を修正中（${detail}）`
+          : `${fromEnd}投前を修正中`;
+      } else {
+        inputEditCursorEl.hidden = true;
+        inputEditCursorEl.textContent = "";
+      }
+    }
+
+    if (matchEnded && !isEditingPast()) {
       inputDisplay.textContent = "試合終了";
       inputDisplay.classList.add("input-display__value--match-end");
       return;
     }
 
-    if (setEnded) {
+    if (setEnded && !isEditingPast()) {
       inputDisplay.textContent = "セット終了";
       inputDisplay.classList.add("input-display__value--set-end");
       return;
@@ -856,8 +912,10 @@
 
   function renderViewMode() {
     const editing = isEditMode();
+    const pastEditing = isEditingPast();
     controlEl.classList.toggle("control--edit-mode", editing);
     controlEl.classList.toggle("control--input-mode", !editing);
+    controlEl.classList.toggle("control--past-edit", pastEditing && !editing);
 
     if (inputViewEl) inputViewEl.hidden = editing;
     if (editViewEl) editViewEl.hidden = !editing;
@@ -870,22 +928,36 @@
     renderViewMode();
 
     const editing = isEditMode();
+    const pastEditing = isEditingPast();
     const orderEntry =
       selectedEditIndex !== null && isOrderEntry(throwLog[selectedEditIndex]);
+    const editableIndices = getEditableThrowIndices();
+    const atFirstEditable =
+      pastEditing && editableIndices.length > 0 && editableIndices[0] === editCursor;
 
     historyPanel?.toggleAttribute?.("hidden", false);
 
-    keypadEl.classList.toggle("keypad--disabled", setEnded || matchEnded || settingsOpen);
+    if (editControlsEl) {
+      editControlsEl.hidden = !editing || selectedEditIndex === null;
+    }
+
+    keypadEl.classList.toggle(
+      "keypad--disabled",
+      (!pastEditing && (setEnded || matchEnded)) || settingsOpen
+    );
     editKeypadEl?.classList.toggle(
       "keypad--disabled",
       settingsOpen || selectedEditIndex === null || orderEntry
     );
 
+    editModeBtn.hidden = pastEditing && !editing;
     editModeBtn.disabled = settingsOpen || matchEnded;
 
     backBtn.hidden = editing;
-    cancelEditBtn.hidden = !editing;
-    cancelEditBtn.disabled = settingsOpen || selectedEditIndex === null;
+    cancelEditBtn.hidden = !(editing || pastEditing);
+    cancelEditBtn.disabled =
+      settingsOpen || (editing && selectedEditIndex === null && !pastEditing);
+    cancelEditBtn.textContent = pastEditing && !editing ? "最新の入力へ戻る" : "修正をやめる";
 
     if (editing) {
       nextSetBtn.hidden = true;
@@ -893,6 +965,11 @@
       confirmBtn.textContent = "修正確定";
       confirmBtn.disabled =
         settingsOpen || selectedEditIndex === null || orderEntry || pendingEditSelection === null;
+    } else if (pastEditing) {
+      nextSetBtn.hidden = true;
+      confirmBtn.hidden = false;
+      confirmBtn.textContent = "決定";
+      confirmBtn.disabled = settingsOpen || pendingSelection === null;
     } else {
       confirmBtn.hidden = setEnded || matchEnded;
       confirmBtn.disabled = settingsOpen || setEnded || matchEnded || pendingSelection === null;
@@ -901,7 +978,8 @@
       nextSetBtn.disabled = settingsOpen || matchEnded;
     }
 
-    backBtn.disabled = editing || history.length === 0 || settingsOpen;
+    backBtn.disabled =
+      editing || settingsOpen || editableIndices.length === 0 || atFirstEditable;
     renderThrowOrderPanel();
     renderKeySelection(keys, editing ? null : pendingSelection);
     renderKeySelection(editKeys, editing ? pendingEditSelection : null);
@@ -1099,6 +1177,8 @@
 
     pendingSelection = null;
     pendingEditSelection = null;
+    editCursor = null;
+    selectedEditIndex = null;
     isApplyingRemote = false;
 
     renderAll({ skipPublish: true });
@@ -1171,7 +1251,8 @@
   }
 
   function selectValue(value) {
-    if (settingsOpen || matchEnded) return;
+    if (settingsOpen) return;
+    if (matchEnded && !isEditMode() && !isEditingPast()) return;
 
     if (isEditMode()) {
       if (selectedEditIndex === null || isOrderEntry(throwLog[selectedEditIndex])) return;
@@ -1183,32 +1264,74 @@
       return;
     }
 
-    if (setEnded) return;
+    if (setEnded && !isEditingPast()) return;
     pendingSelection = value === "miss" ? 0 : value;
     renderInputDisplay();
     renderControls();
     publishSync();
   }
 
+  function applyThrowLogEdit(index, selection) {
+    if (index === null || index < 0 || index >= throwLog.length) return false;
+    if (isOrderEntry(throwLog[index])) return false;
+
+    const before = snapshot();
+    throwLog[index].selection = selection;
+    const result = replayMatch();
+
+    if (result.truncated && result.droppedCount > 0) {
+      const ok = window.confirm(
+        `修正により試合が早く終了したため、後続の${result.droppedCount}件の入力は適用できません。\n切り捨ててよろしいですか？`
+      );
+      if (!ok) {
+        restoreState(before);
+        return false;
+      }
+    }
+
+    history.length = 0;
+    return true;
+  }
+
   function confirmEdit() {
     if (selectedEditIndex === null || pendingEditSelection === null) return;
     if (isOrderEntry(throwLog[selectedEditIndex])) return;
 
-    history.push(snapshot());
+    const applied = applyThrowLogEdit(selectedEditIndex, pendingEditSelection);
+    if (!applied) {
+      renderAll();
+      return;
+    }
 
-    throwLog[selectedEditIndex].selection = pendingEditSelection;
-    replayMatch();
-
-    selectedEditIndex = null;
-    pendingEditSelection = null;
+    clearEditCursor();
     pendingSelection = null;
+    renderAll();
+  }
 
+  function confirmPastEdit() {
+    if (!isEditingPast() || pendingSelection === null) return;
+    if (isOrderEntry(throwLog[editCursor])) return;
+
+    const selection = normalizeSelection(pendingSelection);
+    const applied = applyThrowLogEdit(editCursor, selection);
+    if (!applied) {
+      renderAll();
+      return;
+    }
+
+    clearEditCursor();
+    pendingSelection = null;
     renderAll();
   }
 
   function confirm() {
     if (isEditMode()) {
       confirmEdit();
+      return;
+    }
+
+    if (isEditingPast()) {
+      confirmPastEdit();
       return;
     }
 
@@ -1326,20 +1449,24 @@
   }
 
   function back() {
-    if (isEditMode() || history.length === 0) return;
+    if (isEditMode() || settingsOpen) return;
 
-    const previousLog = cloneThrowLog();
-    restoreState(history.pop());
+    const indices = getEditableThrowIndices();
+    if (!indices.length) return;
 
-    let restoredSelection = null;
-    if (previousLog.length > throwLog.length) {
-      const undone = previousLog[previousLog.length - 1];
-      if (undone && !isOrderEntry(undone)) {
-        restoredSelection = undone.selection;
+    if (!isEditingPast()) {
+      editCursor = indices[indices.length - 1];
+    } else {
+      const pos = indices.indexOf(editCursor);
+      if (pos <= 0) {
+        editCursor = indices[0];
+      } else {
+        editCursor = indices[pos - 1];
       }
     }
 
-    pendingSelection = restoredSelection;
+    const entry = throwLog[editCursor];
+    pendingSelection = entry?.selection ?? null;
     pendingEditSelection = null;
     selectedEditIndex = null;
     renderAll();
@@ -1347,8 +1474,14 @@
 
   function openEditView() {
     viewMode = "edit";
-    selectedEditIndex = null;
-    pendingEditSelection = null;
+    // 過去修正中なら履歴側にも同期
+    if (isEditingPast()) {
+      selectedEditIndex = editCursor;
+      pendingEditSelection = pendingSelection;
+    } else {
+      selectedEditIndex = null;
+      pendingEditSelection = null;
+    }
     collapsedSets.clear();
     // 現在セット以外を折りたたみ
     buildHistoryGroups().forEach((group) => {
@@ -1359,8 +1492,8 @@
 
   function closeEditView() {
     viewMode = "input";
-    selectedEditIndex = null;
-    pendingEditSelection = null;
+    clearEditCursor();
+    pendingSelection = null;
     historyListEl.innerHTML = "";
     renderAll();
   }
@@ -1372,9 +1505,18 @@
   }
 
   function cancelEditSelection() {
+    if (isEditingPast()) {
+      clearEditCursor();
+      pendingSelection = null;
+      viewMode = "input";
+      renderAll();
+      return;
+    }
+
     if (!isEditMode()) return;
     selectedEditIndex = null;
     pendingEditSelection = null;
+    if (editControlsEl) editControlsEl.hidden = true;
     renderAll();
   }
 

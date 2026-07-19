@@ -65,6 +65,11 @@ button {
   padding-bottom: calc(var(--footer-h) + var(--gap-sm) + env(safe-area-inset-bottom));
 }
 
+/* 修正画面では本体スクロールを止め、履歴領域だけ縦スクロールする */
+.control--edit-mode .control__body {
+  overflow: hidden;
+}
+
 /* ── ヘッダー（コンパクト） ── */
 
 .header {
@@ -590,6 +595,7 @@ button {
 .view--edit {
   gap: var(--gap-xs);
   padding-bottom: 2px;
+  overflow: hidden;
 }
 
 .control--edit-mode .view--input {
@@ -626,6 +632,34 @@ button {
 
 .input-display--edit {
   min-height: clamp(48px, 9vh, 60px);
+}
+
+.input-display__cursor {
+  margin: 0.3rem 0 0;
+  font-size: clamp(11px, 3vw, 12px);
+  font-weight: 700;
+  color: #ffc107;
+  line-height: 1.35;
+}
+
+.edit-controls {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap-xs);
+  max-height: min(46vh, 20rem);
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: var(--gap-xs);
+  padding-bottom: calc(var(--gap-xs) + env(safe-area-inset-bottom, 0px));
+  background: rgba(18, 24, 32, 0.96);
+}
+
+.edit-controls[hidden] {
+  display: none !important;
 }
 
 .keypad--edit {
@@ -743,6 +777,14 @@ button {
   grid-template-columns: 1.2fr 1fr 2fr;
 }
 
+.control--past-edit .actions {
+  grid-template-columns: 1fr 1fr 1.6fr;
+}
+
+.control--past-edit .action--confirm {
+  grid-column: auto;
+}
+
 .action {
   min-height: var(--footer-h);
   border-radius: clamp(8px, 2vw, 10px);
@@ -816,7 +858,7 @@ button {
 /* ── 修正画面：セット別履歴 ── */
 
 .history-panel {
-  flex: 1;
+  flex: 1 1 auto;
   margin: 0 clamp(10px, 3vw, 14px);
   padding: var(--gap-sm);
   border-radius: 8px;
@@ -826,6 +868,7 @@ button {
   flex-direction: column;
   min-height: 0;
   max-height: none;
+  overflow: hidden;
 }
 
 .history-panel__title {
@@ -835,12 +878,28 @@ button {
   color: rgba(255, 255, 255, 0.45);
   margin-bottom: 6px;
   flex-shrink: 0;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.history-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  padding-bottom: calc(1.75rem + env(safe-area-inset-bottom, 0px));
 }
 
 .history-list {
-  overflow-y: auto;
-  flex: 1;
+  overflow: visible;
+  flex: none;
   min-height: 0;
+  max-height: none;
   display: flex;
   flex-direction: column;
   gap: 8px;

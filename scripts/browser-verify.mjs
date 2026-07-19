@@ -664,7 +664,7 @@ async function run() {
       results.push("19. 新試合作成後のOverlay自動切替一式 OK");
     }
 
-    // 20-28) edit view separation, set history, undo selection restore
+    // 20-28) edit view separation, set history, editCursor (非破壊の戻る)
     {
       const control = await openControl(browser, ["SMA", "TEAM B"]);
       const overlay = await openOverlay(browser);
@@ -690,14 +690,25 @@ async function run() {
       await control.waitForFunction(() =>
         document.querySelector('#keypad .key[data-value="5"]')?.classList.contains("key--selected")
       );
-      results.push("20. 戻るで5点が選択状態 OK");
+      assert(
+        await control.evaluate(() => window.SMAScoreSync.read().throwLog.length === 3),
+        "20 log kept"
+      );
+      results.push("20. 戻るで5点が選択状態になり履歴は保持 OK");
 
       await control.evaluate(() => {
         document.querySelector('#keypad .key[data-value="7"]').click();
         document.getElementById("confirmBtn").click();
       });
-      await control.waitForFunction(() => window.SMAScoreSync.read().teams[0].score === 15);
-      results.push("21. 戻る後に7点へ変更して決定 OK");
+      await control.waitForFunction(() => {
+        const log = window.SMAScoreSync.read().throwLog.map((e) => e.selection);
+        return JSON.stringify(log) === JSON.stringify([8, 12, 7]);
+      });
+      await control.waitForFunction(() => {
+        const s = window.SMAScoreSync.read();
+        return s.teams[0].score === 15 && s.teams[1].score === 12;
+      });
+      results.push("21. 戻る後に7点へ変更しても後続を保持して再計算 OK");
 
       await control.evaluate(() => document.getElementById("backBtn").click());
       await control.waitForFunction(() =>
@@ -711,31 +722,35 @@ async function run() {
       await control.waitForFunction(() =>
         document.querySelector('#keypad .key[data-value="8"]')?.classList.contains("key--selected")
       );
-      results.push("22. 複数回戻ると各入力値が順に復元 OK");
+      assert(
+        await control.evaluate(() => window.SMAScoreSync.read().throwLog.length === 3),
+        "22 log kept after multi-back"
+      );
+      results.push("22. 複数回戻っても履歴を破棄せず各入力値が復元 OK");
 
-      await control.evaluate(() => {
-        document.querySelector('#keypad .key[data-value="0"]').click();
-        document.getElementById("confirmBtn").click();
-      });
-      await control.waitForFunction(() => window.SMAScoreSync.read().throwLog.at(-1)?.selection === 0);
+      await control.evaluate(() => document.getElementById("cancelEditBtn").click());
+      await control.waitForFunction(() => document.getElementById("inputEditCursor")?.hidden !== false);
+      await tapConfirm("0");
       await control.evaluate(() => document.getElementById("backBtn").click());
       await control.waitForFunction(() =>
         document.querySelector('#keypad .key[data-value="0"]')?.classList.contains("key--selected")
       );
-      results.push("23. 0を戻すと0が選択状態 OK");
+      assert(
+        await control.evaluate(() => window.SMAScoreSync.read().throwLog.at(-1)?.selection === 0),
+        "23 last kept"
+      );
+      results.push("23. 0を戻すと0が選択状態で履歴保持 OK");
 
-      await control.evaluate(() => {
-        document.querySelector('#keypad .key[data-value="F"]').click();
-        document.getElementById("confirmBtn").click();
-      });
-      await control.waitForFunction(() => window.SMAScoreSync.read().throwLog.at(-1)?.selection === "F");
+      await control.evaluate(() => document.getElementById("cancelEditBtn").click());
+      await control.waitForFunction(() => !document.querySelector(".control--past-edit"));
+      await tapConfirm("F");
       await control.evaluate(() => document.getElementById("backBtn").click());
       await control.waitForFunction(() =>
         document.querySelector('#keypad .key[data-value="F"]')?.classList.contains("key--selected")
       );
-      results.push("24. Fを戻すとFが選択状態 OK");
+      results.push("24. Fを戻すとFが選択状態で履歴保持 OK");
 
-      await control.evaluate(() => document.getElementById("confirmBtn").click());
+      await control.evaluate(() => document.getElementById("cancelEditBtn").click());
       await tapConfirm("3");
       await tapConfirm("4");
 
@@ -786,6 +801,7 @@ async function run() {
         item?.click();
       });
       await control.waitForFunction(() => !!document.querySelector(".history-item--selected"));
+      await control.waitForFunction(() => document.getElementById("editControls")?.hidden === false);
       const beforeEdit = await control.evaluate(() => window.SMAScoreSync.read().teams.map((t) => t.score));
       await control.evaluate(() => {
         document.querySelector('#editKeypad .key[data-value="9"]').click();
@@ -821,6 +837,279 @@ async function run() {
 
       await overlay.close();
       await control.close();
+    }
+
+    // 29-34) edit view vertical scroll on phone viewport
+    {
+      const control = await openControl(browser, ["SMA", "TEAM B"]);
+      await control.setViewport({ width: 390, height: 700, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+
+      async function tapConfirm(value) {
+        const before = await control.evaluate(() => window.SMAScoreSync.read()?.throwLog?.length || 0);
+        await control.evaluate((v) => {
+          document.querySelector(`#keypad .key[data-value="${v}"]`).click();
+          document.getElementById("confirmBtn").click();
+        }, value);
+        await control.waitForFunction(
+          (prev) => (window.SMAScoreSync.read()?.throwLog?.length || 0) > prev,
+          { timeout: 10000 },
+          before
+        );
+      }
+
+      for (const v of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]) {
+        await tapConfirm(v);
+      }
+
+      await control.evaluate(() => document.getElementById("editModeBtn").click());
+      await control.waitForFunction(() => document.getElementById("editView")?.hidden === false);
+
+      const scrollInfo = await control.evaluate(() => {
+        const scroll = document.getElementById("historyScroll");
+        const list = document.getElementById("historyList");
+        if (!scroll || !list) return null;
+        const before = scroll.scrollTop;
+        scroll.scrollTop = scroll.scrollHeight;
+        return {
+          canScroll: scroll.scrollHeight > scroll.clientHeight + 8,
+          scrolled: scroll.scrollTop > before,
+          scrollTop: scroll.scrollTop,
+          scrollHeight: scroll.scrollHeight,
+          clientHeight: scroll.clientHeight,
+          itemCount: list.querySelectorAll(".history-item").length,
+        };
+      });
+      assert(scrollInfo && scrollInfo.itemCount >= 10, `29 items ${scrollInfo?.itemCount}`);
+      assert(scrollInfo.canScroll, `29 canScroll ${JSON.stringify(scrollInfo)}`);
+      assert(scrollInfo.scrolled, `29 scrolled ${JSON.stringify(scrollInfo)}`);
+      results.push("29. スマホviewportで履歴を最下部までスクロールできる OK");
+
+      await control.evaluate(() => {
+        document.querySelectorAll(".history-set--collapsed .history-set__header").forEach((el) => el.click());
+      });
+
+      const fifthOk = await control.evaluate(() => {
+        const items = [...document.querySelectorAll(".history-item:not(.history-item--order)")];
+        const fifth = items[4];
+        if (!fifth) return false;
+        fifth.scrollIntoView({ block: "center" });
+        fifth.click();
+        return fifth.classList.contains("history-item--selected") || !!document.querySelector(".history-item--selected");
+      });
+      assert(fifthOk, "30 select 5th");
+      await control.waitForFunction(() => document.getElementById("editControls")?.hidden === false);
+      results.push("30. 5投目以降の履歴を選択できる OK");
+
+      await control.evaluate(() => {
+        const items = [...document.querySelectorAll(".history-item:not(.history-item--order)")];
+        const last = items[items.length - 1];
+        last?.scrollIntoView({ block: "center" });
+        last?.click();
+      });
+      await control.waitForFunction(() => document.getElementById("editControls")?.hidden === false);
+      const beforeLast = await control.evaluate(() =>
+        window.SMAScoreSync.read().throwLog.map((e) => e.selection)
+      );
+      await control.evaluate(() => {
+        document.querySelector('#editKeypad .key[data-value="1"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await control.waitForFunction((prev) => {
+        const next = window.SMAScoreSync.read().throwLog.map((e) => e.selection);
+        return JSON.stringify(next) !== JSON.stringify(prev);
+      }, {}, beforeLast);
+      results.push("31. 最下部の履歴も修正・確定できる OK");
+
+      await control.evaluate(() => document.getElementById("editModeBtn").click());
+      await control.waitForFunction(() => document.getElementById("editView").hidden === true);
+      const beforeInput = await control.evaluate(() => window.SMAScoreSync.read().throwLog.length);
+      await control.evaluate(() => {
+        document.querySelector('#keypad .key[data-value="2"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await control.waitForFunction((prev) => window.SMAScoreSync.read().throwLog.length > prev, {}, beforeInput);
+      results.push("32. 通常入力へ戻った後も入力画面が使える OK");
+
+      await control.close();
+    }
+
+    // 33-40) back keeps later throws; overwrite + replay
+    {
+      const control = await openControl(browser, ["SMA", "TEAM B"]);
+      const overlay = await openOverlay(browser);
+
+      async function tapConfirm(value) {
+        const before = await control.evaluate(() => window.SMAScoreSync.read()?.throwLog?.length || 0);
+        await control.evaluate((v) => {
+          document.querySelector(`#keypad .key[data-value="${v}"]`).click();
+          document.getElementById("confirmBtn").click();
+        }, value);
+        await control.waitForFunction(
+          (prev) => (window.SMAScoreSync.read()?.throwLog?.length || 0) > prev,
+          { timeout: 10000 },
+          before
+        );
+      }
+
+      await tapConfirm("8");
+      await tapConfirm("12");
+      await tapConfirm("5");
+      await tapConfirm("7");
+
+      for (let i = 0; i < 4; i += 1) {
+        await control.evaluate(() => document.getElementById("backBtn").click());
+      }
+      await control.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="8"]')?.classList.contains("key--selected")
+      );
+      assert(
+        await control.evaluate(() => {
+          const log = window.SMAScoreSync.read().throwLog.map((e) => e.selection);
+          return JSON.stringify(log) === JSON.stringify([8, 12, 5, 7]);
+        }),
+        "33 later kept"
+      );
+      assert(
+        await control.evaluate(() => {
+          const cursor = document.getElementById("inputEditCursor");
+          return cursor && !cursor.hidden && /修正中/.test(cursor.textContent || "");
+        }),
+        "33 banner"
+      );
+      results.push("33. 4回戻っても後続12,5,7が残る OK");
+
+      await control.evaluate(() => {
+        document.querySelector('#keypad .key[data-value="6"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await control.waitForFunction(() => {
+        const log = window.SMAScoreSync.read().throwLog.map((e) => e.selection);
+        return JSON.stringify(log) === JSON.stringify([6, 12, 5, 7]);
+      });
+      await control.waitForFunction(() => {
+        const s = window.SMAScoreSync.read();
+        return s.teams[0].score === 11 && s.teams[1].score === 19;
+      });
+      await overlay.waitForFunction(() => {
+        const s = window.SMAScoreSync.read();
+        return s?.teams?.[0]?.score === 11 && s?.teams?.[1]?.score === 19;
+      });
+      results.push("34. 1投目を6へ変更後も6,12,5,7で再計算・Overlay反映 OK");
+
+      const beforeNew = await control.evaluate(() => window.SMAScoreSync.read().throwLog.length);
+      await control.evaluate(() => {
+        document.querySelector('#keypad .key[data-value="1"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await control.waitForFunction((prev) => window.SMAScoreSync.read().throwLog.length > prev, {}, beforeNew);
+      assert(
+        await control.evaluate(() => {
+          const log = window.SMAScoreSync.read().throwLog.map((e) => e.selection);
+          return log.length === 5 && log[0] === 6 && log[4] === 1;
+        }),
+        "35 append after edit"
+      );
+      results.push("35. 過去修正後に最新地点へ戻り新規入力できる OK");
+
+      // 0 と F を含む履歴でも後続保持
+      await control.evaluate(() => {
+        for (let i = 0; i < 20; i += 1) {
+          const btn = document.getElementById("backBtn");
+          if (btn?.disabled) break;
+          btn.click();
+        }
+      });
+      await control.waitForFunction(() => document.querySelector(".control--past-edit"));
+      await control.evaluate(() => document.getElementById("cancelEditBtn").click());
+
+      const control2 = await openControl(browser, ["A", "B"]);
+      async function tap2(value) {
+        const before = await control2.evaluate(() => window.SMAScoreSync.read()?.throwLog?.length || 0);
+        await control2.evaluate((v) => {
+          document.querySelector(`#keypad .key[data-value="${v}"]`).click();
+          document.getElementById("confirmBtn").click();
+        }, value);
+        await control2.waitForFunction(
+          (prev) => (window.SMAScoreSync.read()?.throwLog?.length || 0) > prev,
+          { timeout: 10000 },
+          before
+        );
+      }
+      await tap2("8");
+      await tap2("0");
+      await tap2("F");
+      await tap2("5");
+      for (let i = 0; i < 4; i += 1) {
+        await control2.evaluate(() => document.getElementById("backBtn").click());
+      }
+      await control2.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="8"]')?.classList.contains("key--selected")
+      );
+      assert(
+        await control2.evaluate(() => {
+          const log = window.SMAScoreSync.read().throwLog.map((e) => e.selection);
+          return JSON.stringify(log) === JSON.stringify([8, 0, "F", 5]);
+        }),
+        "36 0F kept"
+      );
+      await control2.evaluate(() => {
+        document.querySelector('#keypad .key[data-value="6"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await control2.waitForFunction(() => {
+        const log = window.SMAScoreSync.read().throwLog.map((e) => e.selection);
+        return JSON.stringify(log) === JSON.stringify([6, 0, "F", 5]);
+      });
+      results.push("36. 0とFを含む履歴でも後続入力が保持される OK");
+
+      // セットをまたぐ位置まで戻って修正
+      for (let i = 0; i < 40; i += 1) {
+        const status = await control2.evaluate(() => {
+          const s = window.SMAScoreSync.read();
+          return { ended: !!s.setEnded, active: s.activeTeamIndex, score: s.teams[0].score, rev: s.revision };
+        });
+        if (status.ended) break;
+        const value = status.active === 0 ? String(Math.min(12, Math.max(1, 50 - status.score))) : "1";
+        await control2.evaluate((v) => {
+          document.querySelector(`#keypad .key[data-value="${v}"]`).click();
+          document.getElementById("confirmBtn").click();
+        }, value);
+        await control2.waitForFunction((prev) => window.SMAScoreSync.read().revision > prev, { timeout: 10000 }, status.rev);
+      }
+      await control2.waitForFunction(() => window.SMAScoreSync.read().setEnded === true, { timeout: 15000 });
+      await control2.evaluate(() => document.getElementById("nextSetBtn").click());
+      await control2.waitForFunction(() => !window.SMAScoreSync.read().setEnded);
+      await tap2("3");
+      await tap2("4");
+
+      const lenBeforeCross = await control2.evaluate(() => window.SMAScoreSync.read().throwLog.length);
+      for (let i = 0; i < 30; i += 1) {
+        const atFirst = await control2.evaluate(() => document.getElementById("backBtn")?.disabled);
+        if (atFirst) break;
+        await control2.evaluate(() => document.getElementById("backBtn").click());
+      }
+      await control2.waitForFunction(() => document.querySelector(".control--past-edit"));
+      assert(
+        await control2.evaluate((prev) => window.SMAScoreSync.read().throwLog.length === prev, {}, lenBeforeCross),
+        "37 cross-set keep"
+      );
+      await control2.evaluate(() => {
+        document.querySelector('#keypad .key[data-value="9"]').click();
+        document.getElementById("confirmBtn").click();
+      });
+      await control2.waitForFunction((prev) => {
+        const s = window.SMAScoreSync.read();
+        return s.throwLog.length >= Math.min(prev, s.throwLog.length) && s.revision > 0;
+      }, {}, lenBeforeCross);
+      assert(
+        await control2.evaluate((prev) => window.SMAScoreSync.read().throwLog.length >= 2, {}, lenBeforeCross),
+        "37 after edit"
+      );
+      results.push("37. セットをまたぐ位置まで戻って修正しても後続履歴を保持 OK");
+
+      await overlay.close();
+      await control.close();
+      await control2.close();
     }
 
     console.log("\nBROWSER VERIFY RESULTS");

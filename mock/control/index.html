@@ -54,6 +54,7 @@
         <section class="input-display" aria-label="現在入力">
           <p class="input-display__label">現在入力</p>
           <p class="input-display__value input-display__value--waiting" id="inputDisplay">入力待ち</p>
+          <p class="input-display__cursor" id="inputEditCursor" hidden></p>
         </section>
 
         <section class="keypad" id="keypad" aria-label="得点入力">
@@ -88,35 +89,39 @@
 
         <section class="history-panel" id="historyPanel" aria-label="セット別入力履歴">
           <h2 class="history-panel__title">セット別履歴</h2>
-          <div class="history-list" id="historyList"></div>
-        </section>
-
-        <section class="input-display input-display--edit" aria-label="修正入力">
-          <p class="input-display__label">修正入力</p>
-          <p class="input-display__value input-display__value--edit" id="editInputDisplay">履歴を選択</p>
-        </section>
-
-        <section class="keypad keypad--edit" id="editKeypad" aria-label="修正得点入力">
-          <div class="keypad__grid">
-            <button class="key" type="button" data-value="1">1</button>
-            <button class="key" type="button" data-value="2">2</button>
-            <button class="key" type="button" data-value="3">3</button>
-            <button class="key" type="button" data-value="4">4</button>
-            <button class="key" type="button" data-value="5">5</button>
-            <button class="key" type="button" data-value="6">6</button>
-            <button class="key" type="button" data-value="7">7</button>
-            <button class="key" type="button" data-value="8">8</button>
-            <button class="key" type="button" data-value="9">9</button>
-            <button class="key" type="button" data-value="10">10</button>
-            <button class="key" type="button" data-value="11">11</button>
-            <button class="key" type="button" data-value="12">12</button>
-          </div>
-          <div class="keypad__row">
-            <button class="key" type="button" data-value="0">0</button>
-            <button class="key key--miss" type="button" data-value="miss">ミス</button>
-            <button class="key key--foul" type="button" data-value="F">F</button>
+          <div class="history-scroll" id="historyScroll">
+            <div class="history-list" id="historyList"></div>
           </div>
         </section>
+
+        <div class="edit-controls" id="editControls" hidden>
+          <section class="input-display input-display--edit" aria-label="修正入力">
+            <p class="input-display__label">修正入力</p>
+            <p class="input-display__value input-display__value--edit" id="editInputDisplay">履歴を選択</p>
+          </section>
+
+          <section class="keypad keypad--edit" id="editKeypad" aria-label="修正得点入力">
+            <div class="keypad__grid">
+              <button class="key" type="button" data-value="1">1</button>
+              <button class="key" type="button" data-value="2">2</button>
+              <button class="key" type="button" data-value="3">3</button>
+              <button class="key" type="button" data-value="4">4</button>
+              <button class="key" type="button" data-value="5">5</button>
+              <button class="key" type="button" data-value="6">6</button>
+              <button class="key" type="button" data-value="7">7</button>
+              <button class="key" type="button" data-value="8">8</button>
+              <button class="key" type="button" data-value="9">9</button>
+              <button class="key" type="button" data-value="10">10</button>
+              <button class="key" type="button" data-value="11">11</button>
+              <button class="key" type="button" data-value="12">12</button>
+            </div>
+            <div class="keypad__row">
+              <button class="key" type="button" data-value="0">0</button>
+              <button class="key key--miss" type="button" data-value="miss">ミス</button>
+              <button class="key key--foul" type="button" data-value="F">F</button>
+            </div>
+          </section>
+        </div>
       </div>
 
     </div>
@@ -124,7 +129,7 @@
     <footer class="actions" aria-label="操作">
       <button class="action action--edit" type="button" id="editModeBtn">修正画面へ</button>
       <button class="action action--back" type="button" id="backBtn" disabled>戻る</button>
-      <button class="action action--cancel-edit" type="button" id="cancelEditBtn" hidden>選択解除</button>
+      <button class="action action--cancel-edit" type="button" id="cancelEditBtn" hidden>修正をやめる</button>
       <button class="action action--confirm" type="button" id="confirmBtn" disabled>決定</button>
       <button class="action action--confirm action--next-set" type="button" id="nextSetBtn" hidden>次セットへ</button>
     </footer>
