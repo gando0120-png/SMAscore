@@ -1090,7 +1090,7 @@ async function run() {
       }
       await control2.waitForFunction(() => document.querySelector(".control--past-edit"));
       assert(
-        await control2.evaluate((prev) => window.SMAScoreSync.read().throwLog.length === prev, {}, lenBeforeCross),
+        await control2.evaluate((prev) => window.SMAScoreSync.read().throwLog.length === prev, lenBeforeCross),
         "37 cross-set keep"
       );
       await control2.evaluate(() => {
@@ -1099,10 +1099,10 @@ async function run() {
       });
       await control2.waitForFunction((prev) => {
         const s = window.SMAScoreSync.read();
-        return s.throwLog.length >= Math.min(prev, s.throwLog.length) && s.revision > 0;
-      }, {}, lenBeforeCross);
+        return s.throwLog.length >= 2 && s.revision > 0;
+      }, { timeout: 10000 }, lenBeforeCross);
       assert(
-        await control2.evaluate((prev) => window.SMAScoreSync.read().throwLog.length >= 2, {}, lenBeforeCross),
+        await control2.evaluate(() => window.SMAScoreSync.read().throwLog.length >= 2),
         "37 after edit"
       );
       results.push("37. セットをまたぐ位置まで戻って修正しても後続履歴を保持 OK");
