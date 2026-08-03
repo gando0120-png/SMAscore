@@ -81,6 +81,16 @@
     const matchId = getMatchId(data);
 
     if (matchId && lastDeliveredMatchId && matchId !== lastDeliveredMatchId) {
+      // 別試合への切替: より新しい updatedAt のみ受け入れる（古い remote で新試合を潰さない）
+      const stored = readStored();
+      if (stored) {
+        const incomingTs = typeof data.updatedAt === "number" ? data.updatedAt : 0;
+        const storedTs = typeof stored.updatedAt === "number" ? stored.updatedAt : 0;
+        if (incomingTs < storedTs) return false;
+        if (incomingTs === storedTs && getMatchId(stored) === lastDeliveredMatchId) {
+          return false;
+        }
+      }
       return true;
     }
 
@@ -111,6 +121,25 @@
     }
 
     return new Promise((resolve) => {
+      let settled = false;
+      const finish = (result) => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+
+      const timer = setTimeout(() => {
+        console.warn("[SMAScore Sync] Firebase publish timed out; keeping local state");
+        finish({
+          ok: true,
+          committed: true,
+          offline: true,
+          timeout: true,
+          data: payload,
+          revision: getRevision(payload),
+        });
+      }, 1200);
+
       ref.transaction(
         (current) => {
           const currentRevision = getRevision(current);
@@ -137,9 +166,10 @@
           };
         },
         (error, committed, snapshot) => {
+          clearTimeout(timer);
           if (error) {
             console.warn("[SMAScore Sync] Firebase transaction failed:", error.message || error);
-            resolve({ ok: false, committed: false, error });
+            finish({ ok: false, committed: false, error });
             return;
           }
 
@@ -152,20 +182,22 @@
                 "is newer than base",
                 baseRevision
               );
-              resolve({
+              finish({
                 ok: false,
                 committed: false,
                 conflict: true,
                 remote,
                 revision: getRevision(remote),
               });
+            }).catch(() => {
+              finish({ ok: false, committed: false, conflict: true });
             });
             return;
           }
 
           const data = snapshot.val();
           publishLocal(data);
-          resolve({
+          finish({
             ok: true,
             committed: true,
             data,
@@ -181,7 +213,11 @@
     const ref = getStateRef();
     if (!ref) return Promise.resolve();
 
-    return ref.remove().catch(() => undefined);
+    // ネットワーク不通時に remove が永遠に pending にならないようタイムアウトする
+    return Promise.race([
+      ref.remove().catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, 1200)),
+    ]);
   }
 
   function publish(state, options) {

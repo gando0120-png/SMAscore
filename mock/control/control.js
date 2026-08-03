@@ -38,6 +38,15 @@
   const settingsScoreAnimationInput = document.getElementById("settingsScoreAnimation");
   const throwOrderPanel = document.getElementById("throwOrderPanel");
   const throwOrderListEl = document.getElementById("throwOrderList");
+  const matchResultPanel = document.getElementById("matchResultPanel");
+  const matchResultTournament = document.getElementById("matchResultTournament");
+  const matchResultMatch = document.getElementById("matchResultMatch");
+  const matchResultWinner = document.getElementById("matchResultWinner");
+  const matchResultSets = document.getElementById("matchResultSets");
+  const matchResultSummary = document.getElementById("matchResultSummary");
+  const rematchBtn = document.getElementById("rematchBtn");
+  const newMatchBtn = document.getElementById("newMatchBtn");
+  const matchResultStatus = document.getElementById("matchResultStatus");
   const inputViewEl = document.getElementById("inputView");
   const editViewEl = document.getElementById("editView");
   const editInputDisplay = document.getElementById("editInputDisplay");
@@ -94,8 +103,11 @@
   let setWinnerIndex = null;
   let matchEnded = false;
   let matchWinnerIndex = null;
+  /** @type {Array<{setNumber:number,scores:Array<{teamIndex:number,score:number,disqualified:boolean}>,winnerTeamIndex:number|null,endReason:string}>} */
+  let setResults = [];
   const history = [];
   const throwLog = [];
+  let matchTransitionBusy = false;
 
   /** "input" = 通常入力画面, "edit" = 修正画面 */
   let viewMode = "input";
@@ -173,6 +185,15 @@
     return [...throwOrder];
   }
 
+  function cloneSetResults() {
+    return setResults.map((result) => ({
+      setNumber: result.setNumber,
+      winnerTeamIndex: result.winnerTeamIndex ?? null,
+      endReason: result.endReason || "score",
+      scores: (result.scores || []).map((score) => ({ ...score })),
+    }));
+  }
+
   function snapshot() {
     return {
       teams: cloneTeams(),
@@ -185,6 +206,7 @@
       matchEnded,
       matchWinnerIndex,
       throwLog: cloneThrowLog(),
+      setResults: cloneSetResults(),
     };
   }
 
@@ -204,6 +226,57 @@
     matchWinnerIndex = state.matchWinnerIndex ?? null;
     throwLog.length = 0;
     state.throwLog.forEach((entry) => throwLog.push({ ...entry }));
+    setResults = Array.isArray(state.setResults)
+      ? state.setResults.map((result) => ({
+          setNumber: result.setNumber,
+          winnerTeamIndex: result.winnerTeamIndex ?? null,
+          endReason: result.endReason || "score",
+          scores: (result.scores || []).map((score) => ({ ...score })),
+        }))
+      : [];
+  }
+
+  function buildSetResultEntry(winnerIndex) {
+    const anyDq = teams.some((team) => team.disqualified);
+    return {
+      setNumber: currentSetNumber,
+      scores: teams.map((team, teamIndex) => ({
+        teamIndex,
+        score: team.disqualified ? 0 : team.score,
+        disqualified: !!team.disqualified,
+      })),
+      winnerTeamIndex: winnerIndex,
+      endReason: anyDq ? "disqualification" : "score",
+    };
+  }
+
+  function recordSetResult(winnerIndex) {
+    const entry = buildSetResultEntry(winnerIndex);
+    const existing = setResults.findIndex((result) => result.setNumber === entry.setNumber);
+    if (existing >= 0) {
+      setResults[existing] = entry;
+    } else {
+      setResults.push(entry);
+    }
+  }
+
+  function totalsFromSetResults() {
+    const totals = teams.map(() => 0);
+    setResults.forEach((result) => {
+      (result.scores || []).forEach((row) => {
+        if (row.teamIndex >= 0 && row.teamIndex < totals.length) {
+          totals[row.teamIndex] += Number(row.score) || 0;
+        }
+      });
+    });
+    return totals;
+  }
+
+  function syncTotalsFromSetResults() {
+    const totals = totalsFromSetResults();
+    totals.forEach((total, index) => {
+      if (teams[index]) teams[index].total = total;
+    });
   }
 
   function getActiveTeam() {
@@ -365,6 +438,7 @@
     matchEnded = false;
     matchWinnerIndex = null;
     currentSetNumber = 1;
+    setResults = [];
     applyThrowOrder(ThrowOrder.createDefault(teams.length));
     beginSet();
 
@@ -403,11 +477,12 @@
       const result = resolveThrowDuringReplay(entry.teamIndex);
 
       if (result.setEnded) {
-        addCurrentScoresToTotals();
         setEnded = true;
         setWinnerIndex = result.winnerIndex;
         entry.setEnded = true;
         entry.setWinnerIndex = result.winnerIndex;
+        recordSetResult(result.winnerIndex);
+        addCurrentScoresToTotals();
 
         if (i < log.length - 1) {
           applyNextSetTransition(result.winnerIndex);
@@ -420,6 +495,9 @@
           }
           setNumber = currentSetNumber;
           throwInSet = 0;
+        } else {
+          // ログ末尾でセットが終わった場合も nextSet 相当で setWins / 試合終了を反映
+          applyNextSetTransition(result.winnerIndex);
         }
       } else {
         entry.setEnded = false;
@@ -432,6 +510,22 @@
       matchEnded = recomputed.ended;
       matchWinnerIndex = recomputed.winnerIndex;
     }
+
+    // 試合終了後は進行中セット得点をリセット表示にしない（結果確認用に最終セット得点を残す）
+    if (matchEnded && setResults.length) {
+      const last = setResults[setResults.length - 1];
+      (last.scores || []).forEach((row) => {
+        if (!teams[row.teamIndex]) return;
+        teams[row.teamIndex].score = row.score;
+        teams[row.teamIndex].disqualified = !!row.disqualified;
+        teams[row.teamIndex].won = last.winnerTeamIndex === row.teamIndex;
+        teams[row.teamIndex].misses = 0;
+      });
+      setEnded = false;
+      setWinnerIndex = null;
+    }
+
+    syncTotalsFromSetResults();
 
     throwLog.length = 0;
     log.forEach((entry) => throwLog.push({ ...entry }));
@@ -446,6 +540,7 @@
     if (teams[winnerIndex].score === 50) {
       teams[winnerIndex].won = true;
     }
+    recordSetResult(winnerIndex);
     addCurrentScoresToTotals();
     pendingSelection = null;
   }
@@ -910,6 +1005,91 @@
     }
   }
 
+  function endReasonLabel(reason) {
+    if (reason === "disqualification") return "3連続ミスによる失格";
+    if (reason === "draw") return "引き分け";
+    return "";
+  }
+
+  function renderMatchResultPanel() {
+    if (!matchResultPanel) return;
+
+    const showResult = matchEnded && !isEditMode() && !isEditingPast();
+    matchResultPanel.hidden = !showResult;
+    controlEl.classList.toggle("control--match-result", showResult);
+    if (!showResult) return;
+
+    if (matchResultTournament) matchResultTournament.textContent = META.tournament || "—";
+    if (matchResultMatch) matchResultMatch.textContent = META.match || "—";
+
+    const winnerName =
+      matchWinnerIndex !== null && matchWinnerIndex !== undefined
+        ? teams[matchWinnerIndex]?.name ?? `チーム ${matchWinnerIndex + 1}`
+        : "—";
+    if (matchResultWinner) matchResultWinner.textContent = `勝者：${winnerName}`;
+
+    if (matchResultSets) {
+      if (!setResults.length) {
+        matchResultSets.innerHTML = '<p class="match-result__empty">セット結果がありません</p>';
+      } else {
+        matchResultSets.innerHTML = setResults
+          .map((result) => {
+            const rows = (result.scores || [])
+              .map((row) => {
+                const name = teams[row.teamIndex]?.name ?? `チーム ${row.teamIndex + 1}`;
+                const winnerClass =
+                  result.winnerTeamIndex === row.teamIndex ? " match-result__set-row--winner" : "";
+                const dq = row.disqualified ? "（失格）" : "";
+                return `<div class="match-result__set-row${winnerClass}"><span>${name}</span><span>${row.score}点${dq}</span></div>`;
+              })
+              .join("");
+            const reason = endReasonLabel(result.endReason);
+            return `
+              <article class="match-result__set">
+                <h3 class="match-result__set-title">セット${result.setNumber}</h3>
+                ${rows}
+                ${reason ? `<p class="match-result__set-reason">${reason}</p>` : ""}
+              </article>
+            `;
+          })
+          .join("");
+      }
+    }
+
+    if (matchResultSummary) {
+      const totals = totalsFromSetResults();
+      const setWinsRows = teams
+        .map((team, index) => `<div class="match-result__set-row"><span>${team.name}</span><span>${team.setWins}</span></div>`)
+        .join("");
+      const totalRows = teams
+        .map((team, index) => `<div class="match-result__set-row"><span>${team.name}</span><span>${totals[index] ?? team.total}点</span></div>`)
+        .join("");
+      matchResultSummary.innerHTML = `
+        <div class="match-result__summary-block">
+          <h3>獲得セット</h3>
+          ${setWinsRows}
+        </div>
+        <div class="match-result__summary-block">
+          <h3>合計得点</h3>
+          ${totalRows}
+        </div>
+      `;
+    }
+
+    if (matchResultStatus) {
+      matchResultStatus.hidden = !matchTransitionBusy;
+      matchResultStatus.textContent = matchTransitionBusy ? "準備中…" : "";
+    }
+    if (rematchBtn) {
+      rematchBtn.disabled = matchTransitionBusy;
+      rematchBtn.textContent = matchTransitionBusy ? "準備中…" : "同じ試合をもう一度";
+    }
+    if (newMatchBtn) {
+      newMatchBtn.disabled = matchTransitionBusy;
+      newMatchBtn.textContent = matchTransitionBusy ? "準備中…" : "新しい試合";
+    }
+  }
+
   function renderViewMode() {
     const editing = isEditMode();
     const pastEditing = isEditingPast();
@@ -951,7 +1131,8 @@
     );
 
     editModeBtn.hidden = pastEditing && !editing;
-    editModeBtn.disabled = settingsOpen || matchEnded;
+    // 試合終了後も結果修正できるようにする
+    editModeBtn.disabled = settingsOpen || matchTransitionBusy;
 
     backBtn.hidden = editing;
     cancelEditBtn.hidden = !(editing || pastEditing);
@@ -1080,25 +1261,56 @@
     renderAll();
   }
 
+  function setMatchTransitionBusy(busy) {
+    matchTransitionBusy = busy;
+    renderMatchResultPanel();
+    if (settingsNewMatchBtn) {
+      settingsNewMatchBtn.disabled = busy;
+      settingsNewMatchBtn.textContent = busy ? "準備中…" : "新しい試合を作成";
+    }
+  }
+
+  async function goToNewMatchSetup() {
+    if (matchTransitionBusy) return;
+    setMatchTransitionBusy(true);
+    try {
+      window.SMAScoreMatchStart?.clearDraft?.();
+      await window.SMAScoreMatchStart?.clearGameState?.();
+      window.location.href = "../setup/?mode=new";
+    } catch (error) {
+      console.error("[SMAScore Control] new match failed:", error);
+      setMatchTransitionBusy(false);
+      window.alert("新しい試合の準備に失敗しました。もう一度お試しください。");
+    }
+  }
+
+  async function goToRematchSetup() {
+    if (matchTransitionBusy) return;
+    setMatchTransitionBusy(true);
+    try {
+      window.SMAScoreMatchStart?.saveDraft?.({
+        mode: "rematch",
+        tournament: META.tournament,
+        match: META.match,
+        format: META.format,
+        teamCount: META.teamCount,
+        teamNames: teams.map((team) => team.name),
+        overlaySettings: { ...overlaySettings },
+      });
+      await window.SMAScoreMatchStart?.clearGameState?.();
+      window.location.href = "../setup/?mode=rematch";
+    } catch (error) {
+      console.error("[SMAScore Control] rematch failed:", error);
+      setMatchTransitionBusy(false);
+      window.alert("再試合の準備に失敗しました。もう一度お試しください。");
+    }
+  }
+
   async function confirmNewMatch() {
+    if (matchTransitionBusy) return;
     const ok = window.confirm("現在の試合データは終了します。新しい試合を作成しますか？");
     if (!ok) return;
-
-    try {
-      if (window.SMAScoreSync?.clear) {
-        await SMAScoreSync.clear();
-      } else {
-        localStorage.removeItem("smascore-game-state");
-      }
-    } catch {
-      try {
-        localStorage.removeItem("smascore-game-state");
-      } catch {
-        /* ignore */
-      }
-    }
-
-    window.location.href = "../setup/";
+    await goToNewMatchSetup();
   }
 
   function buildSyncState() {
@@ -1119,6 +1331,7 @@
       pendingSelection: isEditMode() ? pendingEditSelection : pendingSelection,
       currentSetNumber,
       throwLog: cloneThrowLog(),
+      setResults: cloneSetResults(),
       overlaySettings,
       revision: localRevision,
     };
@@ -1129,11 +1342,13 @@
 
     const revision = window.SMAScoreSync?.getRevision(state) ?? 0;
     const incomingMatchId = window.SMAScoreSync?.getMatchId?.(state) || state.matchId || "";
-    const sameMatch = !incomingMatchId || !META.matchId || incomingMatchId === META.matchId;
+    const sameMatch = !!incomingMatchId && !!META.matchId && incomingMatchId === META.matchId;
 
-    if (sameMatch && revision <= localRevision) return;
+    // 別試合 / matchId 無しの remote は現行試合へ適用しない
+    if (!sameMatch) return;
+    if (revision <= localRevision && !(revision === 0 && localRevision === 0)) return;
 
-    if (sameMatch && revision > localRevision && pendingSelection !== null) {
+    if (revision > localRevision && pendingSelection !== null) {
       console.warn("[SMAScore Control] Remote update received; pending input cleared.");
     }
 
@@ -1171,6 +1386,17 @@
       console.warn("[SMAScore Control] Remote state lacks throwLog; score display only applied.");
     }
 
+    if (Array.isArray(state.setResults)) {
+      setResults = state.setResults.map((result) => ({
+        setNumber: result.setNumber,
+        winnerTeamIndex: result.winnerTeamIndex ?? null,
+        endReason: result.endReason || "score",
+        scores: (result.scores || []).map((score) => ({ ...score })),
+      }));
+    } else {
+      setResults = [];
+    }
+
     if (state.overlaySettings) {
       overlaySettings = { ...overlaySettings, ...state.overlaySettings };
     }
@@ -1188,6 +1414,19 @@
     if (isApplyingRemote || !window.SMAScoreSync) return;
     if (suppressPublish) {
       pendingPublish = true;
+      // bootstrap 中でも localStorage には反映し、テストや同一タブの read() を最新に保つ
+      try {
+        const pendingRevision = Math.max(localRevision + 1, 1);
+        localRevision = pendingRevision;
+        const payload = {
+          ...buildSyncState(),
+          revision: pendingRevision,
+          updatedAt: Date.now(),
+        };
+        localStorage.setItem(SMAScoreSync.STORAGE_KEY, JSON.stringify(payload));
+      } catch {
+        /* ignore */
+      }
       return;
     }
     pendingPublish = false;
@@ -1244,6 +1483,7 @@
     renderEditInputDisplay();
     renderHistoryList();
     renderControls();
+    renderMatchResultPanel();
 
     if (!options?.skipPublish) {
       publishSync();
@@ -1499,7 +1739,7 @@
   }
 
   function toggleEditMode() {
-    if (settingsOpen || matchEnded) return;
+    if (settingsOpen || matchTransitionBusy) return;
     if (isEditMode()) closeEditView();
     else openEditView();
   }
@@ -1552,42 +1792,146 @@
   settingsBackdrop.addEventListener("click", closeSettings);
   settingsForm.addEventListener("submit", saveSettings);
   settingsNewMatchBtn.addEventListener("click", confirmNewMatch);
+  rematchBtn?.addEventListener("click", () => {
+    goToRematchSetup();
+  });
+  newMatchBtn?.addEventListener("click", () => {
+    goToNewMatchSetup();
+  });
 
   async function bootstrap() {
+    window.SMAScoreControlReady = false;
+
     if (!window.SMAScoreSync) {
       suppressPublish = false;
       renderAll();
+      window.SMAScoreControlReady = true;
       return;
     }
+
+    // Firebase 待ちの間も UI を先に出す（ready は同期完了後）
+    renderAll({ skipPublish: true });
+    // 万一同期待ちが詰まっても 5 秒で操作可能にする
+    setTimeout(() => {
+      if (!window.SMAScoreControlReady) {
+        console.warn("[SMAScore Control] bootstrap watchdog: forcing ready");
+        suppressPublish = false;
+        window.SMAScoreControlReady = true;
+      }
+    }, 5000);
 
     SMAScoreSync.subscribe((state) => {
       if (!state?.teams?.length) return;
       const incomingMatchId = SMAScoreSync.getMatchId?.(state) || state.matchId || "";
-      const sameMatch = !incomingMatchId || !META.matchId || incomingMatchId === META.matchId;
-      if (!sameMatch || SMAScoreSync.getRevision(state) > localRevision) {
+      // matchId が無い旧 state は現行試合として扱わない（新試合を古い得点で上書きしない）
+      const sameMatch = !!incomingMatchId && !!META.matchId && incomingMatchId === META.matchId;
+      if (sameMatch && SMAScoreSync.getRevision(state) > localRevision) {
+        applySyncState(state);
+      } else if (sameMatch && SMAScoreSync.getRevision(state) === 0 && localRevision === 0) {
         applySyncState(state);
       }
     });
 
-    const remote = await SMAScoreSync.ready(3000);
-    const remoteRevision = SMAScoreSync.getRevision(remote);
-    const remoteMatchId = remote
-      ? SMAScoreSync.getMatchId?.(remote) || remote.matchId || ""
-      : "";
-    const remoteIsSameMatch =
-      !remoteMatchId || !META.matchId || remoteMatchId === META.matchId;
+    const syncBootstrap = async () => {
+      let remote = null;
+      try {
+        remote = await Promise.race([
+          SMAScoreSync.ready(1200),
+          new Promise((resolve) => setTimeout(() => resolve(SMAScoreSync.read()), 1300)),
+        ]);
+      } catch {
+        remote = SMAScoreSync.read();
+      }
 
-    if (remote?.teams?.length && remoteRevision > 0 && remoteIsSameMatch) {
-      applySyncState(remote);
-    } else {
-      // 新規試合、または room に別 matchId が残っている場合はローカル試合を publish
-      renderAll({ skipPublish: true });
-      localRevision = 0;
-      const result = await SMAScoreSync.publish(buildSyncState(), {
-        baseRevision: remoteIsSameMatch ? remoteRevision : 0,
-      });
-      if (result?.committed && result.data) {
-        localRevision = SMAScoreSync.getRevision(result.data);
+      const remoteRevision = SMAScoreSync.getRevision(remote);
+      const remoteMatchId = remote
+        ? SMAScoreSync.getMatchId?.(remote) || remote.matchId || ""
+        : "";
+      const remoteIsSameMatch =
+        !!remoteMatchId && !!META.matchId && remoteMatchId === META.matchId;
+
+      if (remote?.teams?.length && remoteRevision > 0 && remoteIsSameMatch) {
+        applySyncState(remote);
+      } else {
+        localRevision = 0;
+        try {
+          const result = await Promise.race([
+            SMAScoreSync.publish(buildSyncState(), {
+              baseRevision: remoteIsSameMatch ? remoteRevision : 0,
+            }),
+            new Promise((resolve) =>
+              setTimeout(
+                () =>
+                  resolve({
+                    ok: true,
+                    committed: true,
+                    timeout: true,
+                    data: { ...buildSyncState(), revision: 1 },
+                  }),
+                1500
+              )
+            ),
+          ]);
+          if (result?.committed && result.data) {
+            localRevision = SMAScoreSync.getRevision(result.data) || 1;
+            if (result.timeout) {
+              // タイムアウト時も local に初期 state を残す
+              try {
+                localStorage.setItem(
+                  SMAScoreSync.STORAGE_KEY,
+                  JSON.stringify({
+                    ...buildSyncState(),
+                    revision: localRevision,
+                    updatedAt: Date.now(),
+                  })
+                );
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        } catch (error) {
+          console.warn("[SMAScore Control] initial publish failed:", error);
+          try {
+            localStorage.setItem(
+              SMAScoreSync.STORAGE_KEY,
+              JSON.stringify({
+                ...buildSyncState(),
+                revision: 1,
+                updatedAt: Date.now(),
+              })
+            );
+            localRevision = 1;
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    };
+
+    try {
+      await Promise.race([
+        syncBootstrap(),
+        new Promise((resolve) => setTimeout(resolve, 4000)),
+      ]);
+    } catch (error) {
+      console.warn("[SMAScore Control] bootstrap sync error:", error);
+    }
+
+    // local にまだ state が無ければ最低限書き込む
+    if (!SMAScoreSync.read()?.teams?.length) {
+      try {
+        localStorage.setItem(
+          SMAScoreSync.STORAGE_KEY,
+          JSON.stringify({
+            ...buildSyncState(),
+            revision: Math.max(1, localRevision || 1),
+            updatedAt: Date.now(),
+          })
+        );
+        localRevision = Math.max(1, localRevision || 1);
+      } catch {
+        /* ignore */
       }
     }
 
@@ -1595,7 +1939,27 @@
     if (pendingPublish) {
       publishSync();
     }
+    window.SMAScoreControlReady = true;
   }
 
-  bootstrap();
+  bootstrap().catch((error) => {
+    console.error("[SMAScore Control] bootstrap failed:", error);
+    suppressPublish = false;
+    try {
+      renderAll({ skipPublish: true });
+      if (window.SMAScoreSync && !SMAScoreSync.read()?.teams?.length) {
+        localStorage.setItem(
+          SMAScoreSync.STORAGE_KEY,
+          JSON.stringify({
+            ...buildSyncState(),
+            revision: 1,
+            updatedAt: Date.now(),
+          })
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+    window.SMAScoreControlReady = true;
+  });
 })();

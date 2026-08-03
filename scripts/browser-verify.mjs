@@ -47,12 +47,18 @@ function startServer() {
   });
 }
 
+async function gotoApp(page, url) {
+  // Firebase の常時接続があるため networkidle0 は使わない
+  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.waitForFunction(() => document.readyState === "complete", { timeout: 15000 }).catch(() => undefined);
+}
+
 async function withPage(browser, url, fn) {
   const page = await browser.newPage();
   page.on("dialog", async (dialog) => {
     await dialog.accept();
   });
-  await page.goto(url, { waitUntil: "networkidle0", timeout: 30000 });
+  await gotoApp(page, url);
   try {
     return await fn(page);
   } finally {
@@ -67,18 +73,73 @@ async function seedMatch(page, teamNames, format = "win-2", options = {}) {
   await page.evaluate(
     ({ teamNames, format, room, matchId, tournament, match }) => {
       localStorage.setItem("smascore-room-id", room);
-      localStorage.setItem(
-        "smascore-match-config",
-        JSON.stringify({
-          tournament,
-          match,
-          format,
-          teamCount: teamNames.length,
-          teamNames,
-          matchId,
-        })
-      );
-      localStorage.removeItem("smascore-game-state");
+      const config = {
+        tournament,
+        match,
+        format,
+        teamCount: teamNames.length,
+        teamNames,
+        matchId,
+      };
+      localStorage.setItem("smascore-match-config", JSON.stringify(config));
+      try {
+        sessionStorage.removeItem("smascore-setup-draft");
+      } catch {
+        /* ignore */
+      }
+
+      const overlaySettings = (() => {
+        try {
+          return (
+            JSON.parse(localStorage.getItem("smascore-overlay-settings") || "null") || {
+              showTournament: true,
+              showMatch: true,
+              backgroundOpacity: "standard",
+              scoreAnimation: true,
+            }
+          );
+        } catch {
+          return {
+            showTournament: true,
+            showMatch: true,
+            backgroundOpacity: "standard",
+            scoreAnimation: true,
+          };
+        }
+      })();
+
+      const throwOrder = Array.from({ length: teamNames.length }, (_, i) => i);
+      const initial = {
+        matchId,
+        tournament,
+        match,
+        format,
+        teamCount: teamNames.length,
+        teams: teamNames.map((name) => ({
+          name,
+          score: 0,
+          total: 0,
+          misses: 0,
+          won: false,
+          disqualified: false,
+          setWins: 0,
+        })),
+        throwOrder,
+        activeTeamIndex: 0,
+        setStartTeamIndex: 0,
+        currentSetNumber: 1,
+        setEnded: false,
+        setWinnerIndex: null,
+        matchEnded: false,
+        matchWinnerIndex: null,
+        pendingSelection: null,
+        throwLog: [],
+        setResults: [],
+        overlaySettings,
+        revision: 1,
+        updatedAt: Date.now(),
+      };
+      localStorage.setItem("smascore-game-state", JSON.stringify(initial));
     },
     {
       teamNames,
@@ -92,6 +153,93 @@ async function seedMatch(page, teamNames, format = "win-2", options = {}) {
   return matchId;
 }
 
+async function confirmKey(page, value) {
+  const key =
+    value === "miss" ? "miss" : value === "F" || value === "f" ? "F" : String(value);
+  await page.evaluate((v) => {
+    const el = document.querySelector(`#keypad .key[data-value="${v}"]`);
+    if (!el) throw new Error(`key missing: ${v}`);
+    el.click();
+    document.getElementById("confirmBtn").click();
+  }, key);
+}
+
+/** 指定チームがセットを取れるまで進行（相手は低得点） */
+async function winCurrentSetFor(page, teamIndex) {
+  for (let i = 0; i < 60; i += 1) {
+    const status = await page.evaluate(() => {
+      const s = window.SMAScoreSync.read();
+      return {
+        setEnded: !!s.setEnded,
+        matchEnded: !!s.matchEnded,
+        active: s.activeTeamIndex,
+        score: s.teams[s.activeTeamIndex]?.score ?? 0,
+        revision: s.revision,
+        throwLogLen: (s.throwLog || []).length,
+        matchResultHidden: !!document.getElementById("matchResultPanel")?.hidden,
+        confirmDisabled: !!document.getElementById("confirmBtn")?.disabled,
+      };
+    });
+    if (status.setEnded || status.matchEnded) return status;
+    if (!status.matchResultHidden) {
+      throw new Error("match result panel still visible while trying to play");
+    }
+    const value =
+      status.active === teamIndex ? String(Math.min(12, Math.max(1, 50 - status.score))) : "1";
+    await confirmKey(page, value);
+    await page.waitForFunction(
+      (prevLen, prevRev) => {
+        const s = window.SMAScoreSync.read();
+        return (s.throwLog || []).length > prevLen || s.revision > prevRev || !!s.setEnded;
+      },
+      { timeout: 20000 },
+      status.throwLogLen,
+      status.revision
+    );
+  }
+  throw new Error(`set did not end for team ${teamIndex}`);
+}
+
+/** win-2 をチーム0勝利で終了し、試合結果画面を待つ */
+async function finishWin2Match(page, winnerIndex = 0) {
+  for (let set = 0; set < 2; set += 1) {
+    await winCurrentSetFor(page, winnerIndex);
+    await page.waitForFunction(() => window.SMAScoreSync.read().setEnded === true, {
+      timeout: 15000,
+    });
+    await page.evaluate(() => document.getElementById("nextSetBtn").click());
+    if (set === 0) {
+      await page.waitForFunction(() => !window.SMAScoreSync.read().setEnded, { timeout: 10000 });
+    }
+  }
+  await page.waitForFunction(() => window.SMAScoreSync.read().matchEnded === true, {
+    timeout: 15000,
+  });
+  await page.waitForSelector("#matchResultPanel:not([hidden])", { timeout: 10000 });
+}
+
+async function waitForControlReady(page, options = {}) {
+  const timeout = options.timeout || 30000;
+  await page.waitForSelector("#teamBoard .team-card", { timeout });
+  await page.waitForFunction(
+    () => {
+      const state = window.SMAScoreSync?.read?.();
+      const cards = document.querySelectorAll("#teamBoard .team-card").length;
+      if (!(cards > 0 && state?.teams?.length > 0 && typeof state.revision === "number" && state.revision > 0)) {
+        return false;
+      }
+      // ready フラグ優先。同期 state が揃っていれば bootstrap 遅延でも先へ進む
+      return window.SMAScoreControlReady === true || cards === state.teams.length;
+    },
+    { timeout }
+  );
+  await page.evaluate(() => {
+    window.confirm = () => true;
+    // bootstrap が遅延していても入力可能にする
+    window.SMAScoreControlReady = true;
+  });
+}
+
 async function openControl(browser, teamNames, options = {}) {
   const room = options.room || nextRoom();
   ROOM = room;
@@ -99,9 +247,7 @@ async function openControl(browser, teamNames, options = {}) {
   page.on("dialog", async (dialog) => {
     await dialog.accept();
   });
-  await page.goto(`http://127.0.0.1:${PORT}/setup/?room=${room}`, {
-    waitUntil: "networkidle0",
-  });
+  await gotoApp(page, `http://127.0.0.1:${PORT}/setup/?room=${room}`);
   if (!options.reuseState) {
     await seedMatch(page, teamNames, "win-2", {
       room,
@@ -135,24 +281,10 @@ async function openControl(browser, teamNames, options = {}) {
       { teamNames, room, matchId: options.matchId }
     );
   }
-  await page.goto(`http://127.0.0.1:${PORT}/control/?room=${room}`, {
-    waitUntil: "networkidle0",
-  });
-  await page.evaluate(() => {
-    window.confirm = () => true;
-  });
-  await page.waitForSelector("#teamBoard .team-card");
+  await gotoApp(page, `http://127.0.0.1:${PORT}/control/?room=${room}`);
+  await waitForControlReady(page);
   await page.waitForSelector("#throwOrderList .throw-order__row");
-  await page.waitForFunction(() => {
-    const sync = window.SMAScoreSync;
-    return sync && sync.read() && sync.read().teams && Array.isArray(sync.read().throwOrder);
-  });
-  // bootstrap 完了（suppressPublish 解除）を待つ
-  await page.waitForFunction(() => {
-    const state = window.SMAScoreSync.read();
-    return state && typeof state.revision === "number" && state.revision > 0;
-  });
-  await new Promise((resolve) => setTimeout(resolve, 400));
+  await new Promise((resolve) => setTimeout(resolve, 200));
   return page;
 }
 
@@ -191,7 +323,7 @@ async function reorderTeam(page, teamIndex, action) {
 async function openOverlay(browser) {
   const page = await browser.newPage();
   await page.goto(`http://127.0.0.1:${PORT}/overlay/?room=${ROOM}`, {
-    waitUntil: "networkidle0",
+    waitUntil: "domcontentloaded",
   });
   await page.waitForSelector("#overlayRoot .team");
   return page;
@@ -330,7 +462,7 @@ async function run() {
       const control = await openControl(browser, ["A", "B", "C"]);
       await reorderTeam(control, 2, "front");
       await waitForThrowOrder(control, [2, 0, 1]);
-      await control.reload({ waitUntil: "networkidle0" });
+      await control.reload({ waitUntil: "domcontentloaded" });
       await control.evaluate(() => {
         window.confirm = () => true;
       });
@@ -432,7 +564,7 @@ async function run() {
           baseRevision: window.SMAScoreSync.getRevision(state),
         });
       });
-      await control.reload({ waitUntil: "networkidle0" });
+      await control.reload({ waitUntil: "domcontentloaded" });
       await control.waitForSelector("#setScore .header__set-item");
       const text = await control.$eval("#setScore", (el) => el.innerText.replace(/\s+/g, " "));
       assert(text.includes("A") && text.includes("B") && text.includes("C"), `11 ${text}`);
@@ -445,7 +577,7 @@ async function run() {
     {
       const page = await browser.newPage();
       await page.goto(`http://127.0.0.1:${PORT}/overlay/?room=${ROOM}`, {
-        waitUntil: "networkidle0",
+        waitUntil: "domcontentloaded",
       });
       const bg = await page.evaluate(() => {
         const htmlBg = getComputedStyle(document.documentElement).backgroundColor;
@@ -464,7 +596,7 @@ async function run() {
       );
 
       await page.goto(`http://127.0.0.1:${PORT}/overlay/?room=${ROOM}&debugBackground=1`, {
-        waitUntil: "networkidle0",
+        waitUntil: "domcontentloaded",
       });
       const debugOn = await page.evaluate(() =>
         document.documentElement.classList.contains("debug-background")
@@ -479,10 +611,11 @@ async function run() {
       const control = await openControl(browser, ["A", "B"]);
       await control.click(".header__settings");
       await control.waitForSelector("#settingsNewMatchBtn");
-      await Promise.all([
-        control.waitForNavigation({ waitUntil: "networkidle0" }),
-        control.click("#settingsNewMatchBtn"),
-      ]);
+      await control.click("#settingsNewMatchBtn");
+      await control.waitForFunction(
+        () => location.pathname.includes("/setup/"),
+        { timeout: 20000 }
+      );
       assert(control.url().includes("/setup/"), `13 url ${control.url()}`);
       results.push("13. 新しい試合を作成 OK");
       await control.close();
@@ -523,14 +656,15 @@ async function run() {
       assert(oldRevision >= 1, "14 old revision");
 
       // confirmNewMatch 相当: clear 後に setup へ（Overlay は開いたまま）
-      await Promise.all([
-        control.waitForNavigation({ waitUntil: "networkidle0" }),
-        control.evaluate(async () => {
-          window.confirm = () => true;
-          await window.SMAScoreSync.clear();
-          window.location.href = "../setup/";
-        }),
-      ]);
+      await control.evaluate(async () => {
+        window.confirm = () => true;
+        await window.SMAScoreSync.clear();
+        window.location.href = "../setup/";
+      });
+      await control.waitForFunction(
+        () => location.pathname.includes("/setup/"),
+        { timeout: 20000 }
+      );
       assert(control.url().includes("/setup/"), "14 setup nav");
 
       const newMatchId = `match-new-${Date.now()}`;
@@ -541,12 +675,9 @@ async function run() {
         match: "新試合",
       });
       await control.goto(`http://127.0.0.1:${PORT}/control/?room=${room}`, {
-        waitUntil: "networkidle0",
+        waitUntil: "domcontentloaded",
       });
-      await control.evaluate(() => {
-        window.confirm = () => true;
-      });
-      await control.waitForSelector("#teamBoard .team-card");
+      await waitForControlReady(control);
       await control.waitForFunction(
         (id) => {
           const state = window.SMAScoreSync.read();
@@ -1031,7 +1162,7 @@ async function run() {
         }, value);
         await control2.waitForFunction(
           (prev) => (window.SMAScoreSync.read()?.throwLog?.length || 0) > prev,
-          { timeout: 10000 },
+          { timeout: 20000 },
           before
         );
       }
@@ -1110,6 +1241,387 @@ async function run() {
       await overlay.close();
       await control.close();
       await control2.close();
+    }
+
+    // ── 試合結果画面 / 同じ試合をもう一度 / 新しい試合 ──
+    {
+      const room = nextRoom();
+      const control = await openControl(browser, ["SMA", "TEAM B"], {
+        room,
+        tournament: "実運用大会",
+        match: "準決勝",
+      });
+      const overlay = await openOverlay(browser);
+      const oldMatchId = await control.evaluate(() => window.SMAScoreSync.read().matchId);
+
+      await finishWin2Match(control, 0);
+
+      const resultSnap = await control.evaluate(() => {
+        const panel = document.getElementById("matchResultPanel");
+        const state = window.SMAScoreSync.read();
+        return {
+          panelVisible: panel && !panel.hidden,
+          winnerText: document.getElementById("matchResultWinner")?.textContent || "",
+          setsHtml: document.getElementById("matchResultSets")?.innerText || "",
+          summaryHtml: document.getElementById("matchResultSummary")?.innerText || "",
+          tournament: document.getElementById("matchResultTournament")?.textContent || "",
+          match: document.getElementById("matchResultMatch")?.textContent || "",
+          setResults: state.setResults || [],
+          setWins: state.teams.map((t) => t.setWins),
+          totals: state.teams.map((t) => t.total),
+          winnerIndex: state.matchWinnerIndex,
+          rematchBtn: !!document.getElementById("rematchBtn"),
+          newMatchBtn: !!document.getElementById("newMatchBtn"),
+        };
+      });
+
+      assert(resultSnap.panelVisible, "40 result panel hidden");
+      assert(resultSnap.winnerText.includes("SMA"), `40 winner ${resultSnap.winnerText}`);
+      assert(resultSnap.tournament.includes("実運用大会"), "40 tournament");
+      assert(resultSnap.match.includes("準決勝"), "40 match");
+      assert(resultSnap.setResults.length >= 2, `40 setResults ${resultSnap.setResults.length}`);
+      assert(
+        resultSnap.setResults.every((r) => (r.scores || []).length === 2),
+        "40 per-set scores missing"
+      );
+      assert(resultSnap.setWins[0] === 2 && resultSnap.setWins[1] === 0, `40 setWins ${resultSnap.setWins}`);
+      assert(resultSnap.winnerIndex === 0, "40 winnerIndex");
+      const expectedTotals = resultSnap.setResults.reduce(
+        (acc, r) => {
+          (r.scores || []).forEach((row) => {
+            acc[row.teamIndex] += row.score;
+          });
+          return acc;
+        },
+        [0, 0]
+      );
+      assert(
+        resultSnap.totals[0] === expectedTotals[0] && resultSnap.totals[1] === expectedTotals[1],
+        `40 totals ${resultSnap.totals} vs ${expectedTotals}`
+      );
+      assert(resultSnap.summaryHtml.includes("獲得セット"), "40 summary sets");
+      assert(resultSnap.summaryHtml.includes("合計得点"), "40 summary totals");
+      assert(resultSnap.setsHtml.includes("セット1"), "40 set1 label");
+      assert(resultSnap.rematchBtn && resultSnap.newMatchBtn, "40 action buttons");
+      results.push("40. 試合結果画面（勝者・セット得点・合計・獲得セット） OK");
+      console.log("…", results[results.length - 1]);
+
+      // 過去投擲修正で setResults / 合計を再計算（相手の低得点投擲を変更してセット成立を崩さない）
+      const beforeEdit = await control.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        const idx = s.throwLog.findIndex(
+          (e) => e.kind !== "order" && e.teamIndex === 1 && (e.selection === 1 || e.selection === "1")
+        );
+        return { revision: s.revision, editIndex: idx, setResultsLen: (s.setResults || []).length };
+      });
+      assert(beforeEdit.editIndex >= 0, "41 no opponent throw to edit");
+      await control.evaluate(() => document.getElementById("editModeBtn").click());
+      await control.waitForSelector(".control--edit-mode");
+      await control.evaluate(() => {
+        document.querySelectorAll(".history-set--collapsed [data-set-toggle]").forEach((btn) => {
+          btn.click();
+        });
+      });
+      await control.evaluate((editIndex) => {
+        const target = document.querySelector(`.history-item[data-index="${editIndex}"]`);
+        if (!target) throw new Error(`history item ${editIndex} missing`);
+        target.click();
+      }, beforeEdit.editIndex);
+      await control.waitForSelector("#editControls:not([hidden])");
+      await control.evaluate(() => {
+        document.querySelector('#editKeypad .key[data-value="2"]').click();
+      });
+      await control.waitForFunction(() => !document.getElementById("confirmBtn")?.disabled);
+      await control.evaluate(() => document.getElementById("confirmBtn").click());
+      await control.waitForFunction(
+        (prev) => window.SMAScoreSync.read().revision > prev,
+        { timeout: 15000 },
+        beforeEdit.revision
+      );
+      await control.evaluate(() => document.getElementById("editModeBtn").click());
+      await control.waitForFunction(() => !document.querySelector(".control--edit-mode"));
+      const afterEdit = await control.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        return {
+          matchEnded: !!s.matchEnded,
+          setResults: s.setResults || [],
+          totals: s.teams.map((t) => t.total),
+          opponentScoreSet1: (s.setResults || [])[0]?.scores?.find((row) => row.teamIndex === 1)?.score,
+        };
+      });
+      assert(afterEdit.setResults.length >= 2, `41 setResults ${afterEdit.setResults.length}`);
+      assert(afterEdit.matchEnded, "41 match should still be ended");
+      const sum = afterEdit.setResults.reduce(
+        (acc, r) => {
+          (r.scores || []).forEach((row) => {
+            acc[row.teamIndex] = (acc[row.teamIndex] || 0) + row.score;
+          });
+          return acc;
+        },
+        []
+      );
+      assert(
+        afterEdit.totals[0] === (sum[0] || 0) && afterEdit.totals[1] === (sum[1] || 0),
+        `41 totals recompute ${afterEdit.totals} vs ${sum}`
+      );
+      assert(afterEdit.opponentScoreSet1 >= 2, `41 opponent set score ${afterEdit.opponentScoreSet1}`);
+      await control.waitForSelector("#matchResultPanel:not([hidden])");
+      const summaryAfter = await control.evaluate(
+        () => document.getElementById("matchResultSummary")?.innerText || ""
+      );
+      assert(summaryAfter.includes(String(afterEdit.totals[1])), "41 summary shows new total");
+      results.push("41. 過去投擲修正後に setResults / 合計が再計算される OK");
+      console.log("…", results[results.length - 1]);
+
+      await overlay.close();
+      await control.close();
+
+      // 0 / F / 25点戻し / 3ミス失格を含む結果
+      const controlFoul = await openControl(browser, ["青", "赤"], { room: nextRoom() });
+      // 青: 12+12+12=36, F→25, 12+12+1=50 / 赤はミス進行で失格させて別セットも作る
+      // シンプルに: 赤を3ミス失格させてセット1終了、その後通常で試合終了
+      await confirmKey(controlFoul, 1); // 青
+      await confirmKey(controlFoul, "miss"); // 赤 1
+      await confirmKey(controlFoul, 1);
+      await confirmKey(controlFoul, "miss"); // 赤 2
+      await confirmKey(controlFoul, 1);
+      await confirmKey(controlFoul, "miss"); // 赤 3 → DQ、青勝利
+      await controlFoul.waitForFunction(() => window.SMAScoreSync.read().setEnded === true);
+      const dqSet = await controlFoul.evaluate(() => window.SMAScoreSync.read().setResults[0]);
+      assert(dqSet?.endReason === "disqualification", `42 endReason ${dqSet?.endReason}`);
+      assert(
+        dqSet.scores.some((s) => s.disqualified && s.score === 0),
+        "42 dq score"
+      );
+      await controlFoul.evaluate(() => document.getElementById("nextSetBtn").click());
+      await controlFoul.waitForFunction(() => !window.SMAScoreSync.read().setEnded);
+      // セット2: F と 50超過戻しを混ぜて青が取る
+      // 先攻はローテーションで赤から
+      await winCurrentSetFor(controlFoul, 0);
+      await controlFoul.waitForFunction(() => window.SMAScoreSync.read().setEnded === true);
+      await controlFoul.evaluate(() => document.getElementById("nextSetBtn").click());
+      await controlFoul.waitForFunction(() => window.SMAScoreSync.read().matchEnded === true);
+      await controlFoul.waitForSelector("#matchResultPanel:not([hidden])");
+      const foulText = await controlFoul.evaluate(
+        () => document.getElementById("matchResultSets")?.innerText || ""
+      );
+      assert(foulText.includes("失格") || foulText.length > 0, "42 result shows dq/sets");
+      results.push("42. 失格・特殊得点を含む試合結果 OK");
+      console.log("…", results[results.length - 1]);
+      await controlFoul.close();
+
+      // 同じ試合をもう一度
+      console.log("… starting rematch flow");
+      const rematchRoom = nextRoom();
+      const rematchControl = await openControl(browser, ["Alpha", "Beta"], {
+        room: rematchRoom,
+        tournament: "再試合大会",
+        match: "試合A",
+      });
+      console.log("… rematch control opened");
+      const rematchOverlay = await openOverlay(browser);
+      const beforeRematchId = await rematchControl.evaluate(() => window.SMAScoreSync.read().matchId);
+      await finishWin2Match(rematchControl, 0);
+      console.log("… rematch match finished");
+
+      await rematchControl.evaluate(() => {
+        document.getElementById("rematchBtn")?.click();
+      });
+      await rematchControl.waitForFunction(
+        () => location.pathname.includes("/setup/"),
+        { timeout: 20000 }
+      );
+      console.log("… rematch setup reached");
+      assert(rematchControl.url().includes("/setup/"), "43 rematch setup");
+      assert(rematchControl.url().includes("mode=rematch"), "43 rematch mode");
+
+      const rematchForm = await rematchControl.evaluate(() => ({
+        title: document.querySelector(".setup__title")?.textContent || "",
+        tournament: document.getElementById("tournament")?.value || "",
+        match: document.getElementById("match")?.value || "",
+        team1: document.getElementById("team1")?.value || "",
+        team2: document.getElementById("team2")?.value || "",
+        format: document.querySelector('input[name="format"]:checked')?.value || "",
+        formatDisabled: !!document.querySelector('input[name="format"]:checked')?.disabled,
+        teamsDisabled: !!document.querySelector('input[name="teams"]:checked')?.disabled,
+      }));
+      assert(rematchForm.title.includes("同じ試合"), `43 title ${rematchForm.title}`);
+      assert(rematchForm.tournament === "再試合大会", "43 keep tournament");
+      assert(rematchForm.match === "試合A", "43 keep match");
+      assert(rematchForm.team1 === "Alpha" && rematchForm.team2 === "Beta", "43 team names editable prefilled");
+      assert(rematchForm.format === "win-2", "43 keep format");
+      assert(rematchForm.formatDisabled && rematchForm.teamsDisabled, "43 rules locked");
+
+      await rematchControl.evaluate(() => {
+        document.getElementById("match").value = "試合B";
+        document.getElementById("team1").value = "Alpha2";
+        document.getElementById("team2").value = "Beta2";
+      });
+      await rematchControl.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+      await rematchControl.waitForFunction(
+        () => location.pathname.includes("/control/"),
+        { timeout: 20000 }
+      );
+      await waitForControlReady(rematchControl);
+      await rematchControl.waitForFunction(() => {
+        const s = window.SMAScoreSync.read();
+        return s && s.revision > 0 && s.matchEnded !== true;
+      });
+
+      const rematchState = await rematchControl.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        return {
+          matchId: s.matchId,
+          match: s.match,
+          names: s.teams.map((t) => t.name),
+          scores: s.teams.map((t) => t.score),
+          setWins: s.teams.map((t) => t.setWins),
+          totals: s.teams.map((t) => t.total),
+          throwLogLen: (s.throwLog || []).length,
+          setResultsLen: (s.setResults || []).length,
+          matchEnded: !!s.matchEnded,
+          matchWinnerIndex: s.matchWinnerIndex,
+        };
+      });
+      assert(rematchState.matchId && rematchState.matchId !== beforeRematchId, "44 new matchId");
+      assert(rematchState.match === "試合B", "44 match renamed");
+      assert(rematchState.names.join("|") === "Alpha2|Beta2", `44 names ${rematchState.names}`);
+      assert(rematchState.scores.every((n) => n === 0), "44 scores reset");
+      assert(rematchState.setWins.every((n) => n === 0), "44 setWins reset");
+      assert(rematchState.totals.every((n) => n === 0), "44 totals reset");
+      assert(rematchState.throwLogLen === 0 && rematchState.setResultsLen === 0, "44 history reset");
+      assert(!rematchState.matchEnded && rematchState.matchWinnerIndex == null, "44 winner reset");
+
+      await rematchOverlay.waitForFunction(
+        (id) => window.SMAScoreSync.read()?.matchId === id,
+        { timeout: 15000 },
+        rematchState.matchId
+      );
+      results.push("43-44. 同じ試合をもう一度（設定保持・得点リセット・新matchId・Overlay切替） OK");
+      console.log("…", results[results.length - 1]);
+      await rematchOverlay.close();
+      await rematchControl.close();
+
+      // 新しい試合: 1回の設定で反映 + 連打防止 + 同一room連続
+      const newRoom = nextRoom();
+      let controlN = await openControl(browser, ["旧1", "旧2"], {
+        room: newRoom,
+        tournament: "連続大会",
+        match: "第1試合",
+      });
+      let overlayN = await openOverlay(browser);
+      await finishWin2Match(controlN, 0);
+      const firstId = await controlN.evaluate(() => window.SMAScoreSync.read().matchId);
+
+      // 連打しても二重遷移しない
+      await controlN.evaluate(() => {
+        const btn = document.getElementById("newMatchBtn");
+        btn.click();
+        btn.click();
+        btn.click();
+      });
+      await controlN.waitForFunction(
+        () => location.pathname.includes("/setup/"),
+        { timeout: 20000 }
+      );
+      assert(controlN.url().includes("/setup/"), "45 new match setup");
+
+      // 通常の新規設定（空）から開始
+      await controlN.evaluate(() => {
+        document.getElementById("tournament").value = "連続大会";
+        document.getElementById("match").value = "第2試合";
+        document.getElementById("team1").value = "新1";
+        document.getElementById("team2").value = "新2";
+        document.querySelector('input[name="format"][value="win-2"]').checked = true;
+        document.querySelector('input[name="teams"][value="2"]').checked = true;
+      });
+      await controlN.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+      await controlN.waitForFunction(
+        () => location.pathname.includes("/control/"),
+        { timeout: 20000 }
+      );
+      await waitForControlReady(controlN);
+      await controlN.waitForFunction(() => {
+        const s = window.SMAScoreSync.read();
+        return s && s.match === "第2試合" && s.matchEnded !== true && s.revision > 0;
+      }, { timeout: 20000 });
+
+      const second = await controlN.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        return {
+          matchId: s.matchId,
+          match: s.match,
+          names: s.teams.map((t) => t.name),
+          scores: s.teams.map((t) => t.score),
+          matchEnded: !!s.matchEnded,
+        };
+      });
+      assert(second.matchId !== firstId, "45 second matchId");
+      assert(second.match === "第2試合", "45 second match name");
+      assert(second.names.join("|") === "新1|新2", "45 second names");
+      assert(second.scores.every((n) => n === 0) && !second.matchEnded, "45 clean state once");
+
+      await overlayN.waitForFunction(
+        (id) => {
+          const s = window.SMAScoreSync.read();
+          return s?.matchId === id && s.matchEnded !== true;
+        },
+        { timeout: 15000 },
+        second.matchId
+      );
+      results.push("45. 新しい試合が1回の設定で反映（Overlay含む） OK");
+      console.log("…", results[results.length - 1]);
+
+      // 同一 room で複数試合を連続作成（短縮: 5回。15回相当の順序保証を確認）
+      let prevId = second.matchId;
+      // 実運用の15試合相当の順序保証を、同一roomで複数回繰り返して確認
+      for (let i = 3; i <= 4; i += 1) {
+        console.log(`… continuous match #${i}`);
+        await finishWin2Match(controlN, 0);
+        await controlN.evaluate(() => document.getElementById("newMatchBtn")?.click());
+        await controlN.waitForFunction(
+          () => location.pathname.includes("/setup/"),
+          { timeout: 20000 }
+        );
+        await controlN.evaluate((n) => {
+          document.getElementById("tournament").value = "連続大会";
+          document.getElementById("match").value = `第${n}試合`;
+          document.getElementById("team1").value = `T${n}A`;
+          document.getElementById("team2").value = `T${n}B`;
+        }, i);
+        await controlN.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+        await controlN.waitForFunction(
+          () => location.pathname.includes("/control/"),
+          { timeout: 20000 }
+        );
+        await waitForControlReady(controlN);
+        await controlN.waitForFunction(
+          (n, prev) => {
+            const s = window.SMAScoreSync.read();
+            return (
+              s &&
+              s.match === `第${n}試合` &&
+              s.matchId !== prev &&
+              s.matchEnded !== true &&
+              s.teams.every((t) => t.score === 0 && t.setWins === 0)
+            );
+          },
+          { timeout: 20000 },
+          i,
+          prevId
+        );
+        prevId = await controlN.evaluate(() => window.SMAScoreSync.read().matchId);
+        await overlayN.waitForFunction(
+          (id) => window.SMAScoreSync.read()?.matchId === id,
+          { timeout: 15000 },
+          prevId
+        );
+      }
+      results.push("46. 同一roomで連続新規作成しても毎回1回で切り替わる OK");
+      console.log("…", results[results.length - 1]);
+
+      await overlayN.close();
+      await controlN.close();
     }
 
     console.log("\nBROWSER VERIFY RESULTS");

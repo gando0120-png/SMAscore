@@ -299,3 +299,21 @@ button {
     font-size: 16px;
   }
 }
+
+/* rematch: ロックされた形式・チーム数 */
+.field-group--locked {
+  opacity: 0.72;
+}
+
+.field-group--locked .field-group__title::after {
+  content: "（前試合を引き継ぎ）";
+  margin-left: 0.5em;
+  font-size: 0.75em;
+  font-weight: 500;
+  opacity: 0.8;
+}
+
+.start-btn:disabled {
+  opacity: 0.65;
+  cursor: wait;
+}

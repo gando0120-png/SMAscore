@@ -78,6 +78,24 @@
             <button class="key key--foul" type="button" data-value="F">F</button>
           </div>
         </section>
+
+        <!-- 試合終了結果 -->
+        <section class="match-result" id="matchResultPanel" hidden aria-label="試合結果">
+          <h2 class="match-result__title">試合終了</h2>
+          <p class="match-result__meta">
+            <span id="matchResultTournament"></span>
+            <span class="match-result__meta-sep">｜</span>
+            <span id="matchResultMatch"></span>
+          </p>
+          <p class="match-result__winner" id="matchResultWinner"></p>
+          <div class="match-result__sets" id="matchResultSets"></div>
+          <div class="match-result__summary" id="matchResultSummary"></div>
+          <div class="match-result__actions">
+            <button class="match-result__btn match-result__btn--primary" type="button" id="rematchBtn">同じ試合をもう一度</button>
+            <button class="match-result__btn match-result__btn--ghost" type="button" id="newMatchBtn">新しい試合</button>
+          </div>
+          <p class="match-result__status" id="matchResultStatus" hidden>準備中…</p>
+        </section>
       </div>
 
       <!-- 修正画面（通常入力とは完全分離） -->
@@ -215,6 +233,7 @@
   <script src="../shared/throwOrder.js"></script>
   <script src="../shared/overlaySettings.js"></script>
   <script src="../shared/sync.js"></script>
+  <script src="../shared/matchStart.js"></script>
   <script src="control.js"></script>
 </body>
 </html>
