@@ -1624,6 +1624,271 @@ async function run() {
       await controlN.close();
     }
 
+    // ── 戻るプレビュー: 得点表示を editCursor 直前状態へ ──
+    {
+      const room = nextRoom();
+      const control = await openControl(browser, ["A隊", "B隊"], { room });
+      const overlay = await openOverlay(browser);
+
+      async function tap(value) {
+        const before = await control.evaluate(() => window.SMAScoreSync.read()?.throwLog?.length || 0);
+        await confirmKey(control, value);
+        await control.waitForFunction(
+          (prev) => (window.SMAScoreSync.read()?.throwLog?.length || 0) > prev,
+          { timeout: 10000 },
+          before
+        );
+      }
+
+      await tap(8); // A
+      await tap(12); // B
+      await tap(5); // A
+      await tap(7); // B
+
+      const latest = await control.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        const scores = [...document.querySelectorAll("#teamBoard .team-card")].map((card) => ({
+          name: card.querySelector(".team-card__name")?.textContent?.trim(),
+          score: Number(card.querySelector(".team-card__score")?.textContent || 0),
+          setWins: Number(card.querySelector(".team-card__set-wins-num")?.textContent || 0),
+        }));
+        return {
+          scores,
+          activeName: document.getElementById("teamName")?.textContent?.trim(),
+          throwLogLen: s.throwLog.length,
+          revision: s.revision,
+          teamScores: s.teams.map((t) => t.score),
+        };
+      });
+      assert(latest.throwLogLen === 4, `50 log ${latest.throwLogLen}`);
+      assert(latest.teamScores[0] === 13 && latest.teamScores[1] === 19, `50 latest ${latest.teamScores}`);
+
+      // 戻る1回: 4投目(7)選択、表示は3投目後 = A13 B12、投擲者B
+      const revBeforeBack = latest.revision;
+      await control.evaluate(() => document.getElementById("backBtn").click());
+      await control.waitForFunction(() => document.querySelector(".control--past-preview"));
+      await control.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="7"]')?.classList.contains("key--selected")
+      );
+
+      const back1 = await control.evaluate(() => {
+        const cards = [...document.querySelectorAll("#teamBoard .team-card")];
+        const byName = Object.fromEntries(
+          cards.map((card) => [
+            card.querySelector(".team-card__name")?.textContent?.trim(),
+            Number(card.querySelector(".team-card__score")?.textContent || 0),
+          ])
+        );
+        return {
+          byName,
+          activeName: document.getElementById("teamName")?.textContent?.trim(),
+          cursorText: document.getElementById("inputEditCursor")?.textContent || "",
+          selected7: document
+            .querySelector('#keypad .key[data-value="7"]')
+            ?.classList.contains("key--selected"),
+          throwLogLen: window.SMAScoreSync.read().throwLog.length,
+          syncScores: window.SMAScoreSync.read().teams.map((t) => t.score),
+          revision: window.SMAScoreSync.read().revision,
+        };
+      });
+      assert(back1.selected7, "50 key 7 selected");
+      assert(back1.byName["A隊"] === 13 && back1.byName["B隊"] === 12, `50 preview scores ${JSON.stringify(back1.byName)}`);
+      assert(back1.activeName === "B隊", `50 active ${back1.activeName}`);
+      assert(back1.cursorText.includes("1投前"), `50 cursor ${back1.cursorText}`);
+      assert(back1.throwLogLen === 4, "50 log kept");
+      assert(back1.syncScores[0] === 13 && back1.syncScores[1] === 19, "50 sync still latest");
+      assert(back1.revision === revBeforeBack, "50 no publish on preview");
+      results.push("50. 戻る1回で投擲前プレビュー表示・正式state非更新 OK");
+
+      const overlayDuring = await overlay.evaluate(() =>
+        window.SMAScoreSync.read().teams.map((t) => t.score)
+      );
+      assert(overlayDuring[0] === 13 && overlayDuring[1] === 19, `50 overlay latest ${overlayDuring}`);
+
+      // 戻る2回目: 3投目(5)選択、表示は2投目後 = A8 B12、投擲者A
+      await control.evaluate(() => document.getElementById("backBtn").click());
+      await control.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="5"]')?.classList.contains("key--selected")
+      );
+      const back2 = await control.evaluate(() => {
+        const cards = [...document.querySelectorAll("#teamBoard .team-card")];
+        const byName = Object.fromEntries(
+          cards.map((card) => [
+            card.querySelector(".team-card__name")?.textContent?.trim(),
+            Number(card.querySelector(".team-card__score")?.textContent || 0),
+          ])
+        );
+        return {
+          byName,
+          activeName: document.getElementById("teamName")?.textContent?.trim(),
+          cursorText: document.getElementById("inputEditCursor")?.textContent || "",
+          throwLogLen: window.SMAScoreSync.read().throwLog.length,
+          revision: window.SMAScoreSync.read().revision,
+        };
+      });
+      assert(back2.byName["A隊"] === 8 && back2.byName["B隊"] === 12, `51 preview2 ${JSON.stringify(back2.byName)}`);
+      assert(back2.activeName === "A隊", `51 active ${back2.activeName}`);
+      assert(back2.cursorText.includes("2投前"), `51 cursor ${back2.cursorText}`);
+      assert(back2.throwLogLen === 4 && back2.revision === revBeforeBack, "51 log/rev stable");
+      results.push("51. 戻る連続でプレビューが段階的に戻る OK");
+
+      // キャンセルで最新へ
+      await control.evaluate(() => document.getElementById("cancelEditBtn").click());
+      await control.waitForFunction(() => !document.querySelector(".control--past-preview"));
+      const afterCancel = await control.evaluate(() => {
+        const cards = [...document.querySelectorAll("#teamBoard .team-card")];
+        const byName = Object.fromEntries(
+          cards.map((card) => [
+            card.querySelector(".team-card__name")?.textContent?.trim(),
+            Number(card.querySelector(".team-card__score")?.textContent || 0),
+          ])
+        );
+        const s = window.SMAScoreSync.read();
+        return {
+          byName,
+          selections: [...document.querySelectorAll("#keypad .key--selected")].length,
+          throwLog: s.throwLog.map((e) => e.selection),
+          scores: s.teams.map((t) => t.score),
+        };
+      });
+      assert(afterCancel.byName["A隊"] === 13 && afterCancel.byName["B隊"] === 19, "52 cancel display");
+      assert(afterCancel.selections === 0, "52 selection cleared");
+      assert(JSON.stringify(afterCancel.throwLog) === JSON.stringify([8, 12, 5, 7]), "52 log unchanged");
+      results.push("52. キャンセルで履歴変更なし・最新表示復帰 OK");
+
+      // 再度戻って修正確定
+      await control.evaluate(() => document.getElementById("backBtn").click());
+      await control.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="7"]')?.classList.contains("key--selected")
+      );
+      const revBeforeEdit = await control.evaluate(() => window.SMAScoreSync.read().revision);
+      await control.evaluate(() => {
+        document.querySelector('#keypad .key[data-value="9"]').click();
+      });
+      await control.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="9"]')?.classList.contains("key--selected")
+      );
+      // preview中は publish しない
+      assert(
+        (await control.evaluate(() => window.SMAScoreSync.read().revision)) === revBeforeEdit,
+        "53 no publish while selecting in preview"
+      );
+      await control.evaluate(() => document.getElementById("confirmBtn").click());
+      await control.waitForFunction(() => !document.querySelector(".control--past-preview"));
+      await control.waitForFunction(
+        (prev) => window.SMAScoreSync.read().revision > prev,
+        { timeout: 10000 },
+        revBeforeEdit
+      );
+
+      const afterConfirm = await control.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        const cards = [...document.querySelectorAll("#teamBoard .team-card")];
+        const byName = Object.fromEntries(
+          cards.map((card) => [
+            card.querySelector(".team-card__name")?.textContent?.trim(),
+            Number(card.querySelector(".team-card__score")?.textContent || 0),
+          ])
+        );
+        return {
+          byName,
+          throwLog: s.throwLog.map((e) => e.selection),
+          scores: s.teams.map((t) => t.score),
+        };
+      });
+      assert(JSON.stringify(afterConfirm.throwLog) === JSON.stringify([8, 12, 5, 9]), "53 log edited");
+      assert(afterConfirm.scores[0] === 13 && afterConfirm.scores[1] === 21, `53 scores ${afterConfirm.scores}`);
+      assert(afterConfirm.byName["A隊"] === 13 && afterConfirm.byName["B隊"] === 21, "53 display latest");
+
+      await overlay.waitForFunction(
+        () => {
+          const s = window.SMAScoreSync.read();
+          return s?.teams?.[1]?.score === 21 && s?.throwLog?.map((e) => e.selection).join(",") === "8,12,5,9";
+        },
+        { timeout: 10000 }
+      );
+      results.push("53. 修正確定で全履歴再計算・Overlay更新 OK");
+
+      // セットをまたいで戻る
+      for (let i = 0; i < 40; i += 1) {
+        const status = await control.evaluate(() => {
+          const s = window.SMAScoreSync.read();
+          return {
+            ended: !!s.setEnded,
+            active: s.activeTeamIndex,
+            score: s.teams[s.activeTeamIndex]?.score ?? 0,
+            rev: s.revision,
+          };
+        });
+        if (status.ended) break;
+        const value =
+          status.active === 0 ? String(Math.min(12, Math.max(1, 50 - status.score))) : "1";
+        await confirmKey(control, value);
+        await control.waitForFunction((prev) => window.SMAScoreSync.read().revision > prev, {}, status.rev);
+      }
+      await control.waitForFunction(() => window.SMAScoreSync.read().setEnded === true, { timeout: 15000 });
+      await control.evaluate(() => document.getElementById("nextSetBtn").click());
+      await control.waitForFunction(() => !window.SMAScoreSync.read().setEnded);
+      await tap(3);
+      await tap(4);
+
+      const crossBefore = await control.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        return {
+          setWins: s.teams.map((t) => t.setWins),
+          setNumber: s.currentSetNumber,
+          logLen: s.throwLog.length,
+          revision: s.revision,
+        };
+      });
+      assert(crossBefore.setWins.some((w) => w >= 1), "54 set wins after set1");
+      assert(crossBefore.setNumber >= 2, `54 setNumber ${crossBefore.setNumber}`);
+
+      // セット1の投擲まで戻る
+      for (let i = 0; i < 30; i += 1) {
+        const atFirst = await control.evaluate(() => document.getElementById("backBtn")?.disabled);
+        if (atFirst) break;
+        await control.evaluate(() => document.getElementById("backBtn").click());
+        const setLabel = await control.evaluate(
+          () => document.getElementById("inputEditCursor")?.textContent || ""
+        );
+        if (setLabel.includes("セット1")) break;
+      }
+      await control.waitForFunction(() => document.querySelector(".control--past-preview"));
+      const crossPreview = await control.evaluate(() => {
+        const cards = [...document.querySelectorAll("#teamBoard .team-card")];
+        return {
+          setWins: cards.map((card) =>
+            Number(card.querySelector(".team-card__set-wins-num")?.textContent || 0)
+          ),
+          header: document.getElementById("setScore")?.innerText || "",
+          cursor: document.getElementById("inputEditCursor")?.textContent || "",
+          logLen: window.SMAScoreSync.read().throwLog.length,
+          syncSetWins: window.SMAScoreSync.read().teams.map((t) => t.setWins),
+          revision: window.SMAScoreSync.read().revision,
+        };
+      });
+      assert(crossPreview.cursor.includes("セット1"), `54 cursor ${crossPreview.cursor}`);
+      assert(
+        crossPreview.setWins.every((w) => w === 0),
+        `54 preview setWins ${crossPreview.setWins}`
+      );
+      assert(crossPreview.logLen === crossBefore.logLen, "54 log kept across sets");
+      assert(
+        JSON.stringify(crossPreview.syncSetWins) === JSON.stringify(crossBefore.setWins),
+        "54 sync setWins unchanged"
+      );
+      assert(crossPreview.revision === crossBefore.revision, "54 no publish");
+      results.push("54. セット跨ぎ戻るでセット数・得点が当時のプレビューになる OK");
+
+      await control.evaluate(() => document.getElementById("cancelEditBtn").click());
+      await control.waitForFunction(() => !document.querySelector(".control--past-preview"));
+
+      await overlay.close();
+      await control.close();
+      console.log("… 50-54 past preview OK");
+    }
+
     console.log("\nBROWSER VERIFY RESULTS");
     results.forEach((line) => console.log("✔", line));
     console.log("ALL BROWSER CHECKS PASSED");

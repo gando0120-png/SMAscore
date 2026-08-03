@@ -161,6 +161,228 @@
     return selection;
   }
 
+  /**
+   * 過去修正プレビュー用: throwLog の先頭〜cursor 直前だけを再生した一時状態。
+   * 正式 state（teams / throwLog 等）は変更しない。
+   */
+  function simulateMatchFromLog(previewLog) {
+    const simTeams = teams.map((team) => ({
+      name: team.name,
+      score: 0,
+      total: 0,
+      misses: 0,
+      won: false,
+      disqualified: false,
+      setWins: 0,
+    }));
+
+    let simThrowOrder = ThrowOrder.createDefault(simTeams.length);
+    let simSetStart = ThrowOrder.startIndexOf(simThrowOrder);
+    let simActive = simSetStart;
+    let simSetNumber = 1;
+    let simSetEnded = false;
+    let simSetWinnerIndex = null;
+    let simMatchEnded = false;
+    let simMatchWinnerIndex = null;
+    const simSetResults = [];
+
+    const simApplyFifty = (score) => (score > 50 ? 25 : score);
+    const simNormalize = (selection) =>
+      selection === "miss" || selection === null || selection === undefined ? 0 : selection;
+
+    const simApplySelection = (team, selection) => {
+      const value = simNormalize(selection);
+      if (value >= 1 && value <= 12) {
+        team.score = simApplyFifty(team.score + value);
+        team.misses = 0;
+        team.won = team.score === 50;
+        return;
+      }
+      if (value === 0) {
+        team.misses = Math.min(3, team.misses + 1);
+        if (team.misses >= 3) {
+          team.disqualified = true;
+          team.score = 0;
+          team.won = false;
+        }
+        return;
+      }
+      if (value === "F") {
+        if (team.score >= 37) {
+          team.score = 25;
+          team.won = false;
+        }
+        team.misses = 0;
+      }
+    };
+
+    const simRemaining = () =>
+      simTeams.map((team, index) => (!team.disqualified ? index : -1)).filter((index) => index >= 0);
+
+    const simNextActive = (fromIndex) =>
+      ThrowOrder.getNextActiveIndex(simThrowOrder, fromIndex, simTeams);
+
+    const simResolve = (teamIndex) => {
+      const team = simTeams[teamIndex];
+      if (team.disqualified) {
+        if (simTeams.length === 2) {
+          const winnerIndex = 1 - teamIndex;
+          simTeams[winnerIndex].score = 50;
+          simTeams[winnerIndex].won = true;
+          return { setEnded: true, winnerIndex };
+        }
+        const remaining = simRemaining();
+        if (remaining.length === 1) {
+          simTeams[remaining[0]].score = 50;
+          simTeams[remaining[0]].won = true;
+          return { setEnded: true, winnerIndex: remaining[0] };
+        }
+        simActive = simNextActive(teamIndex);
+        return { setEnded: false };
+      }
+      if (team.score === 50) {
+        team.won = true;
+        return { setEnded: true, winnerIndex: teamIndex };
+      }
+      simActive = simNextActive(teamIndex);
+      return { setEnded: false };
+    };
+
+    const simRecordSet = (winnerIndex) => {
+      const anyDq = simTeams.some((team) => team.disqualified);
+      simSetResults.push({
+        setNumber: simSetNumber,
+        scores: simTeams.map((team, teamIndex) => ({
+          teamIndex,
+          score: team.disqualified ? 0 : team.score,
+          disqualified: !!team.disqualified,
+        })),
+        winnerTeamIndex: winnerIndex,
+        endReason: anyDq ? "disqualification" : "score",
+      });
+      simTeams.forEach((team) => {
+        team.total += team.disqualified ? 0 : team.score;
+      });
+    };
+
+    const simBeginSet = () => {
+      simSetStart = ThrowOrder.startIndexOf(simThrowOrder);
+      simActive = simSetStart;
+      simSetEnded = false;
+      simSetWinnerIndex = null;
+      simTeams.forEach((team) => {
+        team.score = 0;
+        team.misses = 0;
+        team.won = false;
+        team.disqualified = false;
+      });
+    };
+
+    const simNextSet = (winnerIndex) => {
+      const matchResult =
+        window.SMAScoreMatchRules?.evaluateMatchEnd(simTeams, winnerIndex, META.format) ?? {
+          ended: false,
+          winnerIndex: null,
+        };
+      simTeams[winnerIndex].setWins += 1;
+      if (matchResult.ended) {
+        simMatchEnded = true;
+        simMatchWinnerIndex = matchResult.winnerIndex;
+        simSetEnded = false;
+        simSetWinnerIndex = null;
+        return;
+      }
+      simThrowOrder = ThrowOrder.rotateForNextSet(simThrowOrder);
+      simSetNumber += 1;
+      simBeginSet();
+    };
+
+    for (let i = 0; i < previewLog.length; i += 1) {
+      const entry = previewLog[i];
+      if (isOrderEntry(entry)) {
+        if (Array.isArray(entry.throwOrder)) {
+          simThrowOrder = ThrowOrder.normalize(entry.throwOrder, simTeams.length);
+          simSetStart = ThrowOrder.startIndexOf(simThrowOrder);
+        } else if (entry.setStartTeamIndex !== undefined && entry.setStartTeamIndex !== null) {
+          simThrowOrder = ThrowOrder.fromStartIndex(simTeams.length, entry.setStartTeamIndex);
+          simSetStart = ThrowOrder.startIndexOf(simThrowOrder);
+        }
+        simActive = entry.activeTeamIndex;
+        continue;
+      }
+
+      simActive = entry.teamIndex;
+      simApplySelection(simTeams[entry.teamIndex], entry.selection);
+      const result = simResolve(entry.teamIndex);
+      if (result.setEnded) {
+        simSetEnded = true;
+        simSetWinnerIndex = result.winnerIndex;
+        simRecordSet(result.winnerIndex);
+        // プレビューは「次セットへ」押下後の盤面も含める（ログに nextSet 自体は残らない）
+        simNextSet(result.winnerIndex);
+        if (simMatchEnded) break;
+      }
+    }
+
+    return {
+      teams: simTeams,
+      throwOrder: simThrowOrder,
+      activeTeamIndex: simActive,
+      setStartTeamIndex: simSetStart,
+      currentSetNumber: simSetNumber,
+      setEnded: simSetEnded,
+      setWinnerIndex: simSetWinnerIndex,
+      matchEnded: simMatchEnded,
+      matchWinnerIndex: simMatchWinnerIndex,
+      setResults: simSetResults,
+      isPreview: true,
+    };
+  }
+
+  function getPreviewCursorIndex() {
+    if (isEditingPast()) return editCursor;
+    if (
+      isEditMode() &&
+      selectedEditIndex !== null &&
+      selectedEditIndex >= 0 &&
+      selectedEditIndex < throwLog.length &&
+      !isOrderEntry(throwLog[selectedEditIndex])
+    ) {
+      return selectedEditIndex;
+    }
+    return null;
+  }
+
+  function getViewState() {
+    const cursor = getPreviewCursorIndex();
+    if (cursor === null) {
+      return {
+        teams,
+        throwOrder,
+        activeTeamIndex,
+        setStartTeamIndex,
+        currentSetNumber,
+        setEnded,
+        setWinnerIndex,
+        matchEnded,
+        matchWinnerIndex,
+        setResults,
+        isPreview: false,
+      };
+    }
+
+    const preview = simulateMatchFromLog(throwLog.slice(0, cursor));
+    const target = throwLog[cursor];
+    if (target && !isOrderEntry(target) && typeof target.teamIndex === "number") {
+      preview.activeTeamIndex = target.teamIndex;
+    }
+    return preview;
+  }
+
+  function shouldSuppressPublishForPreview() {
+    return getPreviewCursorIndex() !== null;
+  }
+
   function syncStartFromOrder() {
     setStartTeamIndex = ThrowOrder.startIndexOf(throwOrder);
   }
@@ -613,14 +835,15 @@
 
   function renderSetHeader() {
     if (!setScoreEl) return;
+    const view = getViewState();
 
-    const divider = teams.length === 2
+    const divider = view.teams.length === 2
       ? '<span class="header__set-divider">-</span>'
       : '<span class="header__set-divider header__set-divider--bar">|</span>';
 
-    setScoreEl.innerHTML = throwOrder
+    setScoreEl.innerHTML = view.throwOrder
       .map((teamIndex, position) => {
-        const team = teams[teamIndex];
+        const team = view.teams[teamIndex];
         const name = team?.name ?? `チーム ${teamIndex + 1}`;
         const wins = team?.setWins ?? 0;
         const item = `
@@ -650,15 +873,18 @@
   }
 
   function renderTeamBoard() {
-    teamBoardEl.className = `team-board team-board--count-${teams.length}`;
+    const view = getViewState();
+    teamBoardEl.className = `team-board team-board--count-${view.teams.length}`;
 
-    teamBoardEl.innerHTML = throwOrder
+    teamBoardEl.innerHTML = view.throwOrder
       .map((teamIndex) => {
-        const team = teams[teamIndex];
-        const isActive = !isEditMode() && !setEnded && !matchEnded && teamIndex === activeTeamIndex;
-        const isSetWinner = setEnded && teamIndex === setWinnerIndex;
-        const isMatchWinner = matchEnded && teamIndex === matchWinnerIndex;
-        const victoryClass = team.won && !setEnded && !matchEnded ? " team-card__score--victory" : "";
+        const team = view.teams[teamIndex];
+        const isActive =
+          !isEditMode() && !view.setEnded && !view.matchEnded && teamIndex === view.activeTeamIndex;
+        const isSetWinner = view.setEnded && teamIndex === view.setWinnerIndex;
+        const isMatchWinner = view.matchEnded && teamIndex === view.matchWinnerIndex;
+        const victoryClass =
+          team.won && !view.setEnded && !view.matchEnded ? " team-card__score--victory" : "";
         const dqBadge = team.disqualified
           ? '<span class="team-card__badge">失格</span>'
           : "<span></span>";
@@ -685,29 +911,35 @@
 
   function renderThrowOrderPanel() {
     if (!throwOrderPanel || !throwOrderListEl) return;
+    const view = getViewState();
+    const pastPreview = shouldSuppressPublishForPreview();
 
-    const blocked = matchEnded || setEnded || isEditMode() || settingsOpen;
+    const blocked = view.matchEnded || view.setEnded || isEditMode() || settingsOpen;
     throwOrderPanel.hidden = blocked;
     if (blocked) return;
 
-    throwOrderListEl.innerHTML = throwOrder
+    throwOrderListEl.innerHTML = view.throwOrder
       .map((teamIndex, position) => {
-        const team = teams[teamIndex];
+        const team = view.teams[teamIndex];
         const atFirst = position === 0;
-        const atLast = position === throwOrder.length - 1;
+        const atLast = position === view.throwOrder.length - 1;
+        const disabled = pastPreview || atFirst;
+        const disabledRight = pastPreview || atLast;
         return `
           <div class="throw-order__row throw-order__row--color-${teamIndex}" data-team-index="${teamIndex}">
             <span class="throw-order__pos">${position + 1}</span>
             <span class="throw-order__name">${team.name}</span>
             <div class="throw-order__actions">
-              <button type="button" class="throw-order__btn" data-action="front" ${atFirst ? "disabled" : ""}>先頭</button>
-              <button type="button" class="throw-order__btn" data-action="left" ${atFirst ? "disabled" : ""}>←</button>
-              <button type="button" class="throw-order__btn" data-action="right" ${atLast ? "disabled" : ""}>→</button>
+              <button type="button" class="throw-order__btn" data-action="front" ${disabled ? "disabled" : ""}>先頭</button>
+              <button type="button" class="throw-order__btn" data-action="left" ${disabled ? "disabled" : ""}>←</button>
+              <button type="button" class="throw-order__btn" data-action="right" ${disabledRight ? "disabled" : ""}>→</button>
             </div>
           </div>
         `;
       })
       .join("");
+
+    if (pastPreview) return;
 
     throwOrderListEl.querySelectorAll(".throw-order__btn").forEach((button) => {
       button.addEventListener("click", () => {
@@ -857,15 +1089,16 @@
   }
 
   function renderInputTeamBanner() {
-    if (setEnded || matchEnded || isEditMode() || isEditingPast()) {
+    const view = getViewState();
+    if (view.setEnded || view.matchEnded || isEditMode()) {
       inputTeamBanner.classList.add("input-team--hidden");
       return;
     }
 
     inputTeamBanner.classList.remove("input-team--hidden");
-    const colorIndex = activeTeamIndex % 4;
+    const colorIndex = view.activeTeamIndex % 4;
     inputTeamBanner.className = `input-team input-team--color-${colorIndex}`;
-    teamNameEl.textContent = getActiveTeam().name;
+    teamNameEl.textContent = view.teams[view.activeTeamIndex]?.name ?? "";
   }
 
   function selectionToKeyValue(selection) {
@@ -1013,8 +1246,9 @@
 
   function renderMatchResultPanel() {
     if (!matchResultPanel) return;
+    const view = getViewState();
 
-    const showResult = matchEnded && !isEditMode() && !isEditingPast();
+    const showResult = view.matchEnded && !isEditMode() && !isEditingPast();
     matchResultPanel.hidden = !showResult;
     controlEl.classList.toggle("control--match-result", showResult);
     if (!showResult) return;
@@ -1023,20 +1257,20 @@
     if (matchResultMatch) matchResultMatch.textContent = META.match || "—";
 
     const winnerName =
-      matchWinnerIndex !== null && matchWinnerIndex !== undefined
-        ? teams[matchWinnerIndex]?.name ?? `チーム ${matchWinnerIndex + 1}`
+      view.matchWinnerIndex !== null && view.matchWinnerIndex !== undefined
+        ? view.teams[view.matchWinnerIndex]?.name ?? `チーム ${view.matchWinnerIndex + 1}`
         : "—";
     if (matchResultWinner) matchResultWinner.textContent = `勝者：${winnerName}`;
 
     if (matchResultSets) {
-      if (!setResults.length) {
+      if (!view.setResults.length) {
         matchResultSets.innerHTML = '<p class="match-result__empty">セット結果がありません</p>';
       } else {
-        matchResultSets.innerHTML = setResults
+        matchResultSets.innerHTML = view.setResults
           .map((result) => {
             const rows = (result.scores || [])
               .map((row) => {
-                const name = teams[row.teamIndex]?.name ?? `チーム ${row.teamIndex + 1}`;
+                const name = view.teams[row.teamIndex]?.name ?? `チーム ${row.teamIndex + 1}`;
                 const winnerClass =
                   result.winnerTeamIndex === row.teamIndex ? " match-result__set-row--winner" : "";
                 const dq = row.disqualified ? "（失格）" : "";
@@ -1057,11 +1291,16 @@
     }
 
     if (matchResultSummary) {
-      const totals = totalsFromSetResults();
-      const setWinsRows = teams
-        .map((team, index) => `<div class="match-result__set-row"><span>${team.name}</span><span>${team.setWins}</span></div>`)
+      const totals = view.teams.map((team, index) => {
+        return (view.setResults || []).reduce((sum, result) => {
+          const row = (result.scores || []).find((score) => score.teamIndex === index);
+          return sum + (row?.score || 0);
+        }, 0) || team.total;
+      });
+      const setWinsRows = view.teams
+        .map((team) => `<div class="match-result__set-row"><span>${team.name}</span><span>${team.setWins}</span></div>`)
         .join("");
-      const totalRows = teams
+      const totalRows = view.teams
         .map((team, index) => `<div class="match-result__set-row"><span>${team.name}</span><span>${totals[index] ?? team.total}点</span></div>`)
         .join("");
       matchResultSummary.innerHTML = `
@@ -1474,6 +1713,7 @@
   }
 
   function renderAll(options) {
+    controlEl.classList.toggle("control--past-preview", shouldSuppressPublishForPreview());
     renderMetaHeader();
     renderTeamBoard();
     renderSetHeader();
@@ -1485,7 +1725,7 @@
     renderControls();
     renderMatchResultPanel();
 
-    if (!options?.skipPublish) {
+    if (!options?.skipPublish && !shouldSuppressPublishForPreview()) {
       publishSync();
     }
   }
@@ -1500,7 +1740,9 @@
       renderEditSummary();
       renderEditInputDisplay();
       renderControls();
-      publishSync();
+      if (!shouldSuppressPublishForPreview()) {
+        publishSync();
+      }
       return;
     }
 
@@ -1508,7 +1750,9 @@
     pendingSelection = value === "miss" ? 0 : value;
     renderInputDisplay();
     renderControls();
-    publishSync();
+    if (!shouldSuppressPublishForPreview()) {
+      publishSync();
+    }
   }
 
   function applyThrowLogEdit(index, selection) {
@@ -1555,12 +1799,13 @@
     const selection = normalizeSelection(pendingSelection);
     const applied = applyThrowLogEdit(editCursor, selection);
     if (!applied) {
-      renderAll();
+      renderAll({ skipPublish: true });
       return;
     }
 
     clearEditCursor();
     pendingSelection = null;
+    // 全履歴 replay 済みの正式 state を Overlay へ publish
     renderAll();
   }
 
@@ -1749,6 +1994,8 @@
       clearEditCursor();
       pendingSelection = null;
       viewMode = "input";
+      // 正式 state は未変更だが、表示を最新へ確実に戻す
+      replayMatch();
       renderAll();
       return;
     }
