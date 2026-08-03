@@ -1889,6 +1889,159 @@ async function run() {
       console.log("… 50-54 past preview OK");
     }
 
+    // ── 過去修正中フッター: 戻るを中央固定 ──
+    {
+      const room = nextRoom();
+      const control = await openControl(browser, ["A隊", "B隊"], { room });
+      await control.setViewport({
+        width: 390,
+        height: 844,
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+      });
+
+      async function tap(value) {
+        const before = await control.evaluate(() => window.SMAScoreSync.read()?.throwLog?.length || 0);
+        await confirmKey(control, value);
+        await control.waitForFunction(
+          (prev) => (window.SMAScoreSync.read()?.throwLog?.length || 0) > prev,
+          { timeout: 10000 },
+          before
+        );
+      }
+
+      function actionLayout() {
+        return control.evaluate(() => {
+          const footer = document.querySelector(".actions");
+          const edit = document.getElementById("editModeBtn");
+          const cancel = document.getElementById("cancelEditBtn");
+          const back = document.getElementById("backBtn");
+          const confirm = document.getElementById("confirmBtn");
+          const box = (el) => {
+            if (!el || el.hidden) return null;
+            const r = el.getBoundingClientRect();
+            if (r.width <= 0 || r.height <= 0) return null;
+            return {
+              left: Math.round(r.left),
+              right: Math.round(r.right),
+              top: Math.round(r.top),
+              bottom: Math.round(r.bottom),
+              width: Math.round(r.width),
+              centerX: Math.round(r.left + r.width / 2),
+              text: (el.innerText || el.textContent || "").replace(/\s+/g, ""),
+            };
+          };
+          const footerRect = footer.getBoundingClientRect();
+          const visible = [edit, cancel, back, confirm]
+            .map((el) => {
+              const b = box(el);
+              return b ? { id: el.id, ...b } : null;
+            })
+            .filter(Boolean)
+            .sort((a, b) => a.left - b.left);
+          let overlaps = false;
+          for (let i = 0; i < visible.length; i += 1) {
+            for (let j = i + 1; j < visible.length; j += 1) {
+              const a = visible[i];
+              const b = visible[j];
+              if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top) {
+                overlaps = true;
+              }
+            }
+          }
+          return {
+            footerWidth: Math.round(footerRect.width),
+            edit: box(edit),
+            cancel: box(cancel),
+            back: box(back),
+            confirm: box(confirm),
+            visibleIds: visible.map((v) => v.id),
+            pastEdit: document.querySelector(".control--past-edit") != null,
+            overlaps,
+          };
+        });
+      }
+
+      await tap(8);
+      await tap(12);
+      await tap(5);
+      await tap(7);
+
+      const normal = await actionLayout();
+      assert(normal.visibleIds.join(",") === "editModeBtn,backBtn,confirmBtn", `55 normal order ${normal.visibleIds}`);
+      assert(normal.back, "55 back visible");
+      assert(normal.edit && normal.confirm, "55 edit/confirm visible");
+      assert(normal.back.centerX > normal.edit.centerX, "55 back is right of edit");
+      assert(normal.back.centerX < normal.confirm.centerX, "55 back is left of confirm");
+      assert(!normal.overlaps, "55 normal no overlap");
+      results.push("55. 通常入力時に戻るボタンが中央にある OK");
+
+      await control.evaluate(() => document.getElementById("backBtn").click());
+      await control.waitForFunction(() => document.querySelector(".control--past-edit"));
+      await control.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="7"]')?.classList.contains("key--selected")
+      );
+
+      const past1 = await actionLayout();
+      assert(past1.pastEdit, "56 past-edit class");
+      assert(
+        past1.visibleIds.join(",") === "cancelEditBtn,backBtn,confirmBtn",
+        `56 past order ${past1.visibleIds}`
+      );
+      assert(past1.cancel?.text.includes("最新の入力へ戻る"), `56 cancel text ${past1.cancel?.text}`);
+      assert(Math.abs(past1.back.centerX - normal.back.centerX) <= 2, `56 back centerX ${past1.back.centerX} vs ${normal.back.centerX}`);
+      assert(Math.abs(past1.back.width - normal.back.width) <= 2, `56 back width ${past1.back.width} vs ${normal.back.width}`);
+      assert(Math.abs(past1.confirm.centerX - normal.confirm.centerX) <= 2, `56 confirm centerX ${past1.confirm.centerX} vs ${normal.confirm.centerX}`);
+      assert(past1.cancel.centerX < past1.back.centerX, "56 cancel left of back");
+      assert(past1.back.centerX < past1.confirm.centerX, "56 back left of confirm");
+      assert(!past1.overlaps, "56 past no overlap");
+      results.push("56. 過去修正中も戻るが中央・最新へ戻るが左側 OK");
+
+      // 中央の戻るを連続タップしてもキャンセル（最新へ）に当たらない
+      const backBox = past1.back;
+      const backClickY = Math.round((backBox.top + backBox.bottom) / 2);
+      for (let i = 0; i < 3; i += 1) {
+        await control.mouse.click(backBox.centerX, backClickY);
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      await control.waitForFunction(() =>
+        document.querySelector('#keypad .key[data-value="8"]')?.classList.contains("key--selected")
+      );
+      const afterMulti = await control.evaluate(() => ({
+        pastEdit: document.querySelector(".control--past-edit") != null,
+        cursor: document.getElementById("inputEditCursor")?.textContent || "",
+        logLen: window.SMAScoreSync.read().throwLog.length,
+        selected8: document
+          .querySelector('#keypad .key[data-value="8"]')
+          ?.classList.contains("key--selected"),
+      }));
+      assert(afterMulti.pastEdit, "57 still past-edit after multi back");
+      assert(afterMulti.selected8, "57 reached first throw selection");
+      assert(afterMulti.cursor.includes("4投前") || afterMulti.cursor.includes("投前"), `57 cursor ${afterMulti.cursor}`);
+      assert(afterMulti.logLen === 4, "57 log kept");
+      results.push("57. 戻る連続タップで最新へ誤復帰しない OK");
+
+      const pastMulti = await actionLayout();
+      assert(
+        Math.abs(pastMulti.back.centerX - normal.back.centerX) <= 2,
+        `58 back still centered ${pastMulti.back.centerX}`
+      );
+      assert(
+        Math.abs(pastMulti.confirm.centerX - normal.confirm.centerX) <= 2,
+        `58 confirm position stable ${pastMulti.confirm.centerX}`
+      );
+      assert(!pastMulti.overlaps, "58 phone width no overlap");
+      assert(pastMulti.footerWidth <= 390, `58 footer width ${pastMulti.footerWidth}`);
+      results.push("58. 決定位置維持・スマホ幅でボタン非重複 OK");
+
+      await control.evaluate(() => document.getElementById("cancelEditBtn").click());
+      await control.waitForFunction(() => !document.querySelector(".control--past-edit"));
+
+      await control.close();
+      console.log("… 55-58 past-edit footer layout OK");
+    }
+
     console.log("\nBROWSER VERIFY RESULTS");
     results.forEach((line) => console.log("✔", line));
     console.log("ALL BROWSER CHECKS PASSED");

@@ -1377,7 +1377,12 @@
     cancelEditBtn.hidden = !(editing || pastEditing);
     cancelEditBtn.disabled =
       settingsOpen || (editing && selectedEditIndex === null && !pastEditing);
-    cancelEditBtn.textContent = pastEditing && !editing ? "最新の入力へ戻る" : "修正をやめる";
+    if (pastEditing && !editing) {
+      // スマホ幅向けに2行表示（中央「戻る」位置は維持）
+      cancelEditBtn.innerHTML = "最新の入力へ<br>戻る";
+    } else {
+      cancelEditBtn.textContent = "修正をやめる";
+    }
 
     if (editing) {
       nextSetBtn.hidden = true;
