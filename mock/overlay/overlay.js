@@ -66,6 +66,7 @@
       matchEnded: false,
       matchWinnerIndex: null,
       pendingSelection: null,
+      overlayDisplayMode: "score",
       overlaySettings: currentOverlaySettings,
     };
   }
@@ -124,6 +125,7 @@
       matchEnded: false,
       matchWinnerIndex: null,
       pendingSelection: demoSetEnd ? null : pendingSelection,
+      overlayDisplayMode: "score",
       overlaySettings: currentOverlaySettings,
     };
   }
@@ -415,10 +417,113 @@
     prevScores = scoreByTeamIndex;
   }
 
+  function shouldShowResultOverlay(state) {
+    return state?.matchEnded === true && state?.overlayDisplayMode === "result";
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
+
+  function totalsFromSetResults(state) {
+    const teams = state.teams || [];
+    const setResults = Array.isArray(state.setResults) ? state.setResults : [];
+    return teams.map((team, index) => {
+      const fromResults = setResults.reduce((sum, result) => {
+        const row = (result.scores || []).find((score) => score.teamIndex === index);
+        return sum + (Number(row?.score) || 0);
+      }, 0);
+      return fromResults || Number(team.total) || 0;
+    });
+  }
+
+  function renderResultOverlay(state) {
+    const teams = state.teams || [];
+    const teamCount = resolveTeamCount(state);
+    const setResults = Array.isArray(state.setResults) ? state.setResults : [];
+    const totals = totalsFromSetResults(state);
+    const winnerName =
+      state.matchWinnerIndex !== null && state.matchWinnerIndex !== undefined
+        ? teams[state.matchWinnerIndex]?.name || `チーム ${state.matchWinnerIndex + 1}`
+        : "—";
+
+    const setHeaders = setResults
+      .map((result) => `<th scope="col">S${result.setNumber}</th>`)
+      .join("");
+
+    const bodyRows = teams
+      .slice(0, teamCount)
+      .map((team, teamIndex) => {
+        const cells = setResults
+          .map((result) => {
+            const row = (result.scores || []).find((score) => score.teamIndex === teamIndex);
+            const score = row ? Number(row.score) || 0 : "—";
+            const winnerClass =
+              result.winnerTeamIndex === teamIndex ? " result-table__cell--winner" : "";
+            const dq = row?.disqualified ? '<span class="result-table__dq">失格</span>' : "";
+            return `<td class="result-table__cell${winnerClass}">${score}${dq}</td>`;
+          })
+          .join("");
+        const isWinner = state.matchWinnerIndex === teamIndex;
+        return `
+          <tr class="result-table__row${isWinner ? " result-table__row--winner" : ""}" data-team-index="${teamIndex}">
+            <th scope="row" class="result-table__name">
+              <span class="result-table__swatch" style="--team-color:${TEAM_COLORS[teamIndex % 4]}"></span>
+              ${escapeHtml(team.name)}
+            </th>
+            ${cells}
+            <td class="result-table__cell result-table__cell--sets">${Number(team.setWins) || 0}</td>
+            <td class="result-table__cell result-table__cell--total">${totals[teamIndex] ?? 0}</td>
+          </tr>
+        `;
+      })
+      .join("");
+
+    const compactClass =
+      setResults.length >= 4 || teamCount >= 4
+        ? " overlay--result-compact"
+        : setResults.length >= 3 || teamCount >= 3
+          ? " overlay--result-dense"
+          : "";
+
+    overlayRoot.className = `overlay overlay--result overlay--result-${teamCount}${compactClass}`;
+    overlayRoot.innerHTML = `
+      <div class="result-board" aria-label="試合最終結果">
+        <header class="result-board__header">
+          <p class="result-board__title">試合終了</p>
+          <p class="result-board__winner">勝者：${escapeHtml(winnerName)}</p>
+        </header>
+        <table class="result-table">
+          <thead>
+            <tr>
+              <th scope="col" class="result-table__name-head">チーム</th>
+              ${setHeaders}
+              <th scope="col">SET</th>
+              <th scope="col">合計</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${bodyRows || `<tr><td colspan="${Math.max(3, setResults.length + 3)}">結果がありません</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
   function renderOverlay(state) {
     const settings = resolveOverlaySettings(state);
     applyVisualSettings(settings);
     renderMetaBar(state, settings);
+
+    if (shouldShowResultOverlay(state)) {
+      renderResultOverlay(state);
+      prevScores = {};
+      return;
+    }
 
     const teamCount = resolveTeamCount(state);
     const entries = getOrderedEntries(state, teamCount);

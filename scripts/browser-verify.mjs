@@ -71,7 +71,7 @@ async function seedMatch(page, teamNames, format = "win-2", options = {}) {
     options.matchId ||
     `match-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   await page.evaluate(
-    ({ teamNames, format, room, matchId, tournament, match }) => {
+    ({ teamNames, format, room, matchId, tournament, match, finished, setResults: seededResults, teamOverrides }) => {
       localStorage.setItem("smascore-room-id", room);
       const config = {
         tournament,
@@ -109,32 +109,69 @@ async function seedMatch(page, teamNames, format = "win-2", options = {}) {
       })();
 
       const throwOrder = Array.from({ length: teamNames.length }, (_, i) => i);
+      const setResults = finished
+        ? seededResults ||
+          [1, 2].map((setNumber) => ({
+            setNumber,
+            winnerTeamIndex: 0,
+            endReason: "score",
+            scores: teamNames.map((_, teamIndex) => ({
+              teamIndex,
+              score: teamIndex === 0 ? 50 : 20 + teamIndex * 3,
+              disqualified: false,
+            })),
+          }))
+        : [];
+
+      const teams = teamNames.map((name, index) => {
+        const base = {
+          name,
+          score: finished ? (index === 0 ? 50 : 20 + index * 3) : 0,
+          total: finished ? (index === 0 ? 100 : 40 + index * 5) : 0,
+          misses: 0,
+          won: finished ? index === 0 : false,
+          disqualified: false,
+          setWins: finished ? (index === 0 ? 2 : 0) : 0,
+        };
+        if (finished && teamOverrides?.[index]) {
+          return { ...base, ...teamOverrides[index] };
+        }
+        return base;
+      });
+
+      if (finished && setResults.length) {
+        teams.forEach((team, index) => {
+          team.total = setResults.reduce((sum, result) => {
+            const row = (result.scores || []).find((score) => score.teamIndex === index);
+            return sum + (Number(row?.score) || 0);
+          }, 0);
+          const last = setResults[setResults.length - 1]?.scores?.find((row) => row.teamIndex === index);
+          if (last) {
+            team.score = last.score;
+            team.disqualified = !!last.disqualified;
+          }
+        });
+      }
+
       const initial = {
         matchId,
         tournament,
         match,
         format,
         teamCount: teamNames.length,
-        teams: teamNames.map((name) => ({
-          name,
-          score: 0,
-          total: 0,
-          misses: 0,
-          won: false,
-          disqualified: false,
-          setWins: 0,
-        })),
+        teams,
         throwOrder,
         activeTeamIndex: 0,
         setStartTeamIndex: 0,
-        currentSetNumber: 1,
+        currentSetNumber: finished ? Math.max(1, setResults.length) : 1,
         setEnded: false,
         setWinnerIndex: null,
-        matchEnded: false,
-        matchWinnerIndex: null,
+        matchEnded: !!finished,
+        matchWinnerIndex: finished ? 0 : null,
         pendingSelection: null,
         throwLog: [],
-        setResults: [],
+        setResults,
+        overlayDisplayMode: "score",
         overlaySettings,
         revision: 1,
         updatedAt: Date.now(),
@@ -148,6 +185,9 @@ async function seedMatch(page, teamNames, format = "win-2", options = {}) {
       matchId,
       tournament: options.tournament || "検証大会",
       match: options.match || "検証試合",
+      finished: !!options.finished,
+      setResults: options.setResults || null,
+      teamOverrides: options.teamOverrides || null,
     }
   );
   return matchId;
@@ -249,11 +289,14 @@ async function openControl(browser, teamNames, options = {}) {
   });
   await gotoApp(page, `http://127.0.0.1:${PORT}/setup/?room=${room}`);
   if (!options.reuseState) {
-    await seedMatch(page, teamNames, "win-2", {
+    await seedMatch(page, teamNames, options.format || "win-2", {
       room,
       matchId: options.matchId,
       tournament: options.tournament,
       match: options.match,
+      finished: options.finished,
+      setResults: options.setResults,
+      teamOverrides: options.teamOverrides,
     });
   } else {
     await page.evaluate(
@@ -283,7 +326,11 @@ async function openControl(browser, teamNames, options = {}) {
   }
   await gotoApp(page, `http://127.0.0.1:${PORT}/control/?room=${room}`);
   await waitForControlReady(page);
-  await page.waitForSelector("#throwOrderList .throw-order__row");
+  if (!options.finished) {
+    await page.waitForSelector("#throwOrderList .throw-order__row");
+  } else {
+    await page.waitForSelector("#matchResultPanel:not([hidden])", { timeout: 15000 });
+  }
   await new Promise((resolve) => setTimeout(resolve, 200));
   return page;
 }
@@ -2040,6 +2087,354 @@ async function run() {
 
       await control.close();
       console.log("… 55-58 past-edit footer layout OK");
+    }
+
+    // ── Overlay 最終結果表示 ──
+    {
+      const room = nextRoom();
+      const control = await openControl(browser, ["SMA", "TEAM B"], {
+        room,
+        tournament: "結果Overlay大会",
+        match: "決勝",
+      });
+      const overlay = await openOverlay(browser);
+      const overlayPageId = await overlay.evaluate(() => {
+        window.__overlayBootId = `boot-${Date.now()}`;
+        return window.__overlayBootId;
+      });
+
+      await finishWin2Match(control, 0);
+
+      const afterEnd = await Promise.all([
+        control.evaluate(() => {
+          const s = window.SMAScoreSync.read();
+          return {
+            mode: s.overlayDisplayMode || "score",
+            matchEnded: !!s.matchEnded,
+            setWins: s.teams.map((t) => t.setWins),
+            totals: s.teams.map((t) => t.total),
+            winnerIndex: s.matchWinnerIndex,
+            setResults: s.setResults || [],
+            showBtn: !!document.getElementById("showOverlayResultBtn"),
+            hideBtn: !!document.getElementById("hideOverlayResultBtn"),
+          };
+        }),
+        overlay.evaluate(() => ({
+          mode: window.SMAScoreSync.read()?.overlayDisplayMode || "score",
+          hasTeam: !!document.querySelector("#overlayRoot .team"),
+          hasResult: !!document.querySelector("#overlayRoot .result-board"),
+          bootId: window.__overlayBootId,
+          waiting: document.querySelector(".info__waiting, .waiting__label")?.textContent || "",
+        })),
+      ]);
+      assert(afterEnd[0].matchEnded, "60 match ended");
+      assert(afterEnd[0].mode === "score", `60 control mode ${afterEnd[0].mode}`);
+      assert(afterEnd[1].mode === "score", `60 overlay mode ${afterEnd[1].mode}`);
+      assert(afterEnd[1].hasTeam && !afterEnd[1].hasResult, "60 still score overlay");
+      assert(afterEnd[0].showBtn && afterEnd[0].hideBtn, "60 overlay result buttons");
+      results.push("60. 試合終了後も通常スコアOverlayを維持 OK");
+      console.log("…", results[results.length - 1]);
+
+      await control.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlay.waitForFunction(
+        () =>
+          window.SMAScoreSync.read()?.overlayDisplayMode === "result" &&
+          !!document.querySelector("#overlayRoot .result-board"),
+        { timeout: 15000 }
+      );
+      const resultView = await overlay.evaluate((bootId) => {
+        const s = window.SMAScoreSync.read();
+        const root = document.getElementById("overlayRoot");
+        const text = root?.innerText || "";
+        const names = [...root.querySelectorAll(".result-table__name")].map((el) =>
+          el.textContent.replace(/\s+/g, " ").trim()
+        );
+        const setHeaders = [...root.querySelectorAll("thead th")]
+          .map((el) => el.textContent.trim())
+          .filter((t) => /^S\d+$/.test(t));
+        return {
+          bootId: window.__overlayBootId,
+          sameBoot: window.__overlayBootId === bootId,
+          mode: s.overlayDisplayMode,
+          title: root.querySelector(".result-board__title")?.textContent || "",
+          winner: root.querySelector(".result-board__winner")?.textContent || "",
+          text,
+          names,
+          setHeaders,
+          setWins: s.teams.map((t) => t.setWins),
+          totals: s.teams.map((t) => t.total),
+          setResults: s.setResults || [],
+          hasTeam: !!root.querySelector(".team"),
+        };
+      }, overlayPageId);
+      assert(resultView.sameBoot, "61 overlay reloaded unexpectedly");
+      assert(resultView.mode === "result", "61 mode result");
+      assert(resultView.title.includes("試合終了"), `61 title ${resultView.title}`);
+      assert(resultView.winner.includes("SMA"), `61 winner ${resultView.winner}`);
+      assert(!resultView.hasTeam, "61 score teams hidden");
+      assert(resultView.names.some((n) => n.includes("SMA")), `61 names ${resultView.names}`);
+      assert(resultView.names.some((n) => n.includes("TEAM B")), `61 names B ${resultView.names}`);
+      assert(resultView.setWins[0] === 2, `61 setWins ${resultView.setWins}`);
+      assert(resultView.setHeaders.length === resultView.setResults.length, "61 set headers");
+      for (const set of resultView.setResults) {
+        for (const row of set.scores || []) {
+          assert(resultView.text.includes(String(row.score)), `61 missing set score ${row.score}`);
+        }
+      }
+      assert(resultView.text.includes(String(resultView.totals[0])), "61 total A");
+      assert(resultView.text.includes(String(resultView.totals[1])), "61 total B");
+      results.push("61. Overlay結果表示へ無リロード切替・勝者/セット/合計 OK");
+      console.log("…", results[results.length - 1]);
+
+      // 過去投擲修正で結果 Overlay が更新される
+      const beforePatch = await control.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        const idx = s.throwLog.findIndex(
+          (e) => e.kind !== "order" && e.teamIndex === 1 && (e.selection === 1 || e.selection === "1")
+        );
+        return {
+          revision: s.revision,
+          editIndex: idx,
+          oppSet1: (s.setResults || [])[0]?.scores?.find((r) => r.teamIndex === 1)?.score,
+        };
+      });
+      assert(beforePatch.editIndex >= 0, "62 edit target");
+      await control.evaluate(() => document.getElementById("editModeBtn").click());
+      await control.waitForSelector(".control--edit-mode");
+      await control.evaluate(() => {
+        document.querySelectorAll(".history-set--collapsed [data-set-toggle]").forEach((btn) => btn.click());
+      });
+      await control.evaluate((editIndex) => {
+        document.querySelector(`.history-item[data-index="${editIndex}"]`)?.click();
+      }, beforePatch.editIndex);
+      await control.waitForSelector("#editControls:not([hidden])");
+      await control.evaluate(() => document.querySelector('#editKeypad .key[data-value="3"]').click());
+      await control.evaluate(() => document.getElementById("confirmBtn").click());
+      await control.waitForFunction(
+        (prev) => window.SMAScoreSync.read().revision > prev,
+        { timeout: 15000 },
+        beforePatch.revision
+      );
+      await control.evaluate(() => document.getElementById("editModeBtn").click());
+      await control.waitForFunction(() => !document.querySelector(".control--edit-mode"));
+      await overlay.waitForFunction(
+        (prevOpp) => {
+          const s = window.SMAScoreSync.read();
+          if (s?.overlayDisplayMode !== "result") return false;
+          const opp = (s.setResults || [])[0]?.scores?.find((r) => r.teamIndex === 1)?.score;
+          return typeof opp === "number" && opp !== prevOpp && document.body.innerText.includes(String(opp));
+        },
+        { timeout: 15000 },
+        beforePatch.oppSet1
+      );
+      assert(
+        await overlay.evaluate(() => window.SMAScoreSync.read()?.overlayDisplayMode === "result"),
+        "62 still result mode"
+      );
+      results.push("62. 過去投擲修正後に結果Overlayが更新される OK");
+      console.log("…", results[results.length - 1]);
+
+      await control.evaluate(() => document.getElementById("hideOverlayResultBtn").click());
+      await overlay.waitForFunction(
+        () =>
+          (window.SMAScoreSync.read()?.overlayDisplayMode || "score") === "score" &&
+          !!document.querySelector("#overlayRoot .team") &&
+          !document.querySelector("#overlayRoot .result-board"),
+        { timeout: 15000 }
+      );
+      results.push("63. 結果表示終了で通常スコアOverlayへ戻る OK");
+      console.log("…", results[results.length - 1]);
+
+      // 同じ試合をもう一度 → 通常 Overlay
+      await control.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlay.waitForFunction(
+        () => window.SMAScoreSync.read()?.overlayDisplayMode === "result",
+        { timeout: 10000 }
+      );
+      const rematchOldId = await control.evaluate(() => window.SMAScoreSync.read().matchId);
+      await control.evaluate(() => document.getElementById("rematchBtn")?.click());
+      await control.waitForFunction(
+        () => location.pathname.includes("/setup/"),
+        { timeout: 20000 }
+      );
+      await control.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+      await control.waitForFunction(
+        () => location.pathname.includes("/control/"),
+        { timeout: 20000 }
+      );
+      await waitForControlReady(control);
+      await control.waitForFunction(
+        (prev) => {
+          const s = window.SMAScoreSync.read();
+          return s && s.matchId !== prev && s.matchEnded !== true && (s.overlayDisplayMode || "score") === "score";
+        },
+        { timeout: 20000 },
+        rematchOldId
+      );
+      await overlay.waitForFunction(
+        (prev) => {
+          const s = window.SMAScoreSync.read();
+          return (
+            s?.matchId !== prev &&
+            (s.overlayDisplayMode || "score") === "score" &&
+            !!document.querySelector("#overlayRoot .team") &&
+            !document.querySelector("#overlayRoot .result-board")
+          );
+        },
+        { timeout: 20000 },
+        rematchOldId
+      );
+      results.push("64. 同じ試合をもう一度で通常Overlayへ戻る OK");
+      console.log("…", results[results.length - 1]);
+
+      // 新しい試合
+      await finishWin2Match(control, 0);
+      await control.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlay.waitForFunction(
+        () => window.SMAScoreSync.read()?.overlayDisplayMode === "result",
+        { timeout: 10000 }
+      );
+      const newOldId = await control.evaluate(() => window.SMAScoreSync.read().matchId);
+      await control.evaluate(() => document.getElementById("newMatchBtn")?.click());
+      await control.waitForFunction(
+        () => location.pathname.includes("/setup/"),
+        { timeout: 20000 }
+      );
+      await control.evaluate(() => {
+        document.getElementById("tournament").value = "新大会";
+        document.getElementById("match").value = "新試合";
+        document.getElementById("team1").value = "N1";
+        document.getElementById("team2").value = "N2";
+      });
+      await control.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+      await control.waitForFunction(
+        () => location.pathname.includes("/control/"),
+        { timeout: 20000 }
+      );
+      await waitForControlReady(control);
+      await overlay.waitForFunction(
+        (prev) => {
+          const s = window.SMAScoreSync.read();
+          return (
+            s?.matchId !== prev &&
+            (s.overlayDisplayMode || "score") === "score" &&
+            !!document.querySelector("#overlayRoot .team")
+          );
+        },
+        { timeout: 20000 },
+        newOldId
+      );
+      results.push("65. 新しい試合でも通常Overlayへ戻る OK");
+      console.log("…", results[results.length - 1]);
+
+      await overlay.close();
+      await control.close();
+
+      // 3チーム全表示（完了済み state を seed）
+      const room3 = nextRoom();
+      const control3 = await openControl(browser, ["A3", "B3", "C3"], {
+        room: room3,
+        format: "win-2",
+        finished: true,
+      });
+      const overlay3 = await openOverlay(browser);
+      await overlay3.waitForFunction(
+        () => (window.SMAScoreSync.read()?.teams || []).length >= 3,
+        { timeout: 15000 }
+      );
+      assert(
+        await control3.evaluate(() => window.SMAScoreSync.read()?.matchEnded === true),
+        "66 match ended"
+      );
+      await control3.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlay3.waitForFunction(
+        () => document.querySelectorAll("#overlayRoot .result-table__name").length >= 3,
+        { timeout: 15000 }
+      );
+      const threeNames = await overlay3.evaluate(() =>
+        [...document.querySelectorAll("#overlayRoot .result-table__name")].map((el) =>
+          el.textContent.replace(/\s+/g, " ").trim()
+        )
+      );
+      assert(threeNames.some((n) => n.includes("A3")), `66 A3 ${threeNames}`);
+      assert(threeNames.some((n) => n.includes("B3")), `66 B3 ${threeNames}`);
+      assert(threeNames.some((n) => n.includes("C3")), `66 C3 ${threeNames}`);
+      results.push("66. 3チームでも全チーム結果表示 OK");
+      await overlay3.close();
+      await control3.close();
+
+      // 4チーム全表示
+      const room4 = nextRoom();
+      const control4 = await openControl(browser, ["A4", "B4", "C4", "D4"], {
+        room: room4,
+        format: "win-2",
+        finished: true,
+      });
+      const overlay4 = await openOverlay(browser);
+      await control4.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlay4.waitForFunction(
+        () => document.querySelectorAll("#overlayRoot .result-table__name").length >= 4,
+        { timeout: 15000 }
+      );
+      const fourNames = await overlay4.evaluate(() =>
+        [...document.querySelectorAll("#overlayRoot .result-table__name")].map((el) =>
+          el.textContent.replace(/\s+/g, " ").trim()
+        )
+      );
+      assert(fourNames.length >= 4, `67 four ${fourNames}`);
+      assert(
+        ["A4", "B4", "C4", "D4"].every((name) => fourNames.some((n) => n.includes(name))),
+        `67 names ${fourNames}`
+      );
+      results.push("67. 4チームでも全チーム結果表示 OK");
+      await overlay4.close();
+      await control4.close();
+
+      // 失格結果（完了済み state）
+      const roomDq = nextRoom();
+      const controlDq = await openControl(browser, ["青", "赤"], {
+        room: roomDq,
+        finished: true,
+        setResults: [
+          {
+            setNumber: 1,
+            winnerTeamIndex: 0,
+            endReason: "disqualification",
+            scores: [
+              { teamIndex: 0, score: 3, disqualified: false },
+              { teamIndex: 1, score: 0, disqualified: true },
+            ],
+          },
+          {
+            setNumber: 2,
+            winnerTeamIndex: 0,
+            endReason: "score",
+            scores: [
+              { teamIndex: 0, score: 50, disqualified: false },
+              { teamIndex: 1, score: 28, disqualified: false },
+            ],
+          },
+        ],
+        teamOverrides: {
+          0: { setWins: 2, score: 50, total: 53 },
+          1: { setWins: 0, score: 28, total: 28, disqualified: false },
+        },
+      });
+      const overlayDq = await openOverlay(browser);
+      await controlDq.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlayDq.waitForFunction(
+        () =>
+          window.SMAScoreSync.read()?.overlayDisplayMode === "result" &&
+          (document.getElementById("overlayRoot")?.innerText || "").includes("失格"),
+        { timeout: 15000 }
+      );
+      const dqText = await overlayDq.evaluate(() => document.getElementById("overlayRoot")?.innerText || "");
+      assert(dqText.includes("失格"), `68 dq text ${dqText}`);
+      results.push("68. 失格結果もOverlayに表示 OK");
+      await overlayDq.close();
+      await controlDq.close();
+
+      console.log("… 60-68 overlay result display OK");
     }
 
     console.log("\nBROWSER VERIFY RESULTS");

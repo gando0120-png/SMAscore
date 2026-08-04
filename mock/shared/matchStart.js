@@ -48,6 +48,7 @@
       pendingSelection: null,
       throwLog: [],
       setResults: [],
+      overlayDisplayMode: "score",
       overlaySettings: overlaySettings || defaultOverlaySettings(),
     };
   }

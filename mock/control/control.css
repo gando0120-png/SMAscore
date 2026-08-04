@@ -1445,6 +1445,13 @@ button {
   margin-top: 8px;
 }
 
+.match-result__overlay-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .match-result__btn {
   min-height: 48px;
   border-radius: 10px;
@@ -1460,6 +1467,28 @@ button {
 .match-result__btn--ghost {
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.match-result__btn--overlay {
+  background: rgba(66, 165, 245, 0.18);
+  border: 1px solid rgba(66, 165, 245, 0.45);
+  color: #90caf9;
+  font-size: 0.8rem;
+  line-height: 1.25;
+  padding: 6px 8px;
+}
+
+.match-result__btn--overlay-off {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 0.8rem;
+  line-height: 1.25;
+  padding: 6px 8px;
+}
+
+.match-result__btn--active {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
 }
 
 .match-result__btn:disabled {

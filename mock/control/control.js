@@ -47,6 +47,8 @@
   const rematchBtn = document.getElementById("rematchBtn");
   const newMatchBtn = document.getElementById("newMatchBtn");
   const matchResultStatus = document.getElementById("matchResultStatus");
+  const showOverlayResultBtn = document.getElementById("showOverlayResultBtn");
+  const hideOverlayResultBtn = document.getElementById("hideOverlayResultBtn");
   const inputViewEl = document.getElementById("inputView");
   const editViewEl = document.getElementById("editView");
   const editInputDisplay = document.getElementById("editInputDisplay");
@@ -105,6 +107,8 @@
   let matchWinnerIndex = null;
   /** @type {Array<{setNumber:number,scores:Array<{teamIndex:number,score:number,disqualified:boolean}>,winnerTeamIndex:number|null,endReason:string}>} */
   let setResults = [];
+  /** Overlay 表示モード: "score" = 通常スコア, "result" = 最終結果 */
+  let overlayDisplayMode = "score";
   const history = [];
   const throwLog = [];
   let matchTransitionBusy = false;
@@ -745,6 +749,9 @@
       });
       setEnded = false;
       setWinnerIndex = null;
+    } else if (!matchEnded) {
+      // 試合が未終了に戻った場合は結果 Overlay を解除
+      overlayDisplayMode = "score";
     }
 
     syncTotalsFromSetResults();
@@ -1238,6 +1245,33 @@
     }
   }
 
+  function normalizeOverlayDisplayMode(mode) {
+    return mode === "result" ? "result" : "score";
+  }
+
+  function setOverlayDisplayMode(mode) {
+    const next = normalizeOverlayDisplayMode(mode);
+    if (overlayDisplayMode === next) {
+      renderMatchResultPanel();
+      return;
+    }
+    overlayDisplayMode = next;
+    renderMatchResultPanel();
+    if (!shouldSuppressPublishForPreview()) {
+      publishSync();
+    }
+  }
+
+  function showOverlayResult() {
+    if (!matchEnded || matchTransitionBusy) return;
+    setOverlayDisplayMode("result");
+  }
+
+  function hideOverlayResult() {
+    if (matchTransitionBusy) return;
+    setOverlayDisplayMode("score");
+  }
+
   function endReasonLabel(reason) {
     if (reason === "disqualification") return "3連続ミスによる失格";
     if (reason === "draw") return "引き分け";
@@ -1326,6 +1360,18 @@
     if (newMatchBtn) {
       newMatchBtn.disabled = matchTransitionBusy;
       newMatchBtn.textContent = matchTransitionBusy ? "準備中…" : "新しい試合";
+    }
+
+    const showingResult = overlayDisplayMode === "result";
+    if (showOverlayResultBtn) {
+      showOverlayResultBtn.disabled = matchTransitionBusy || showingResult;
+      showOverlayResultBtn.classList.toggle("match-result__btn--active", showingResult);
+      showOverlayResultBtn.setAttribute("aria-pressed", showingResult ? "true" : "false");
+    }
+    if (hideOverlayResultBtn) {
+      hideOverlayResultBtn.disabled = matchTransitionBusy || !showingResult;
+      hideOverlayResultBtn.classList.toggle("match-result__btn--active", !showingResult);
+      hideOverlayResultBtn.setAttribute("aria-pressed", showingResult ? "false" : "true");
     }
   }
 
@@ -1576,6 +1622,7 @@
       currentSetNumber,
       throwLog: cloneThrowLog(),
       setResults: cloneSetResults(),
+      overlayDisplayMode: normalizeOverlayDisplayMode(overlayDisplayMode),
       overlaySettings,
       revision: localRevision,
     };
@@ -1640,6 +1687,8 @@
     } else {
       setResults = [];
     }
+
+    overlayDisplayMode = normalizeOverlayDisplayMode(state.overlayDisplayMode);
 
     if (state.overlaySettings) {
       overlaySettings = { ...overlaySettings, ...state.overlaySettings };
@@ -2050,6 +2099,8 @@
   newMatchBtn?.addEventListener("click", () => {
     goToNewMatchSetup();
   });
+  showOverlayResultBtn?.addEventListener("click", showOverlayResult);
+  hideOverlayResultBtn?.addEventListener("click", hideOverlayResult);
 
   async function bootstrap() {
     window.SMAScoreControlReady = false;
