@@ -122,6 +122,12 @@
     }
 
     const initial = buildInitialGameState(fullConfig, overlaySettings);
+    // 次試合開始時は必ず通常スコア表示（前試合 result を引き継がない）
+    initial.overlayDisplayMode = "score";
+    initial.matchEnded = false;
+    initial.matchWinnerIndex = null;
+    initial.setResults = [];
+    initial.throwLog = [];
 
     if (window.SMAScoreSync?.publish) {
       const publishOnce = () =>
@@ -133,14 +139,20 @@
         ]);
       const result = await publishOnce();
       if (!result?.committed && result?.conflict) {
-        // 衝突時も新 matchId で再送
+        // 衝突時も新 matchId で再送（score 固定を維持）
+        initial.overlayDisplayMode = "score";
         await publishOnce();
       }
     } else {
       try {
         localStorage.setItem(
           "smascore-game-state",
-          JSON.stringify({ ...initial, revision: 1, updatedAt: Date.now() })
+          JSON.stringify({
+            ...initial,
+            overlayDisplayMode: "score",
+            revision: 1,
+            updatedAt: Date.now(),
+          })
         );
       } catch {
         /* ignore */

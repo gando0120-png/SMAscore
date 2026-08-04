@@ -2437,6 +2437,237 @@ async function run() {
       console.log("… 60-68 overlay result display OK");
     }
 
+    // ── 結果表示のまま次試合へ進んでも Overlay が score に自動復帰 ──
+    {
+      const room = nextRoom();
+      const control = await openControl(browser, ["Alpha", "Beta"], {
+        room,
+        tournament: "自動復帰大会",
+        match: "第1試合",
+      });
+      const overlay = await openOverlay(browser);
+
+      await finishWin2Match(control, 0);
+      await control.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlay.waitForFunction(
+        () =>
+          window.SMAScoreSync.read()?.overlayDisplayMode === "result" &&
+          !!document.querySelector("#overlayRoot .result-board"),
+        { timeout: 15000 }
+      );
+      const match1Id = await control.evaluate(() => window.SMAScoreSync.read().matchId);
+      results.push("70. 第1試合終了後に結果Overlay表示 OK");
+      console.log("…", results[results.length - 1]);
+
+      // 結果表示を終了せず「同じ試合をもう一度」
+      await control.evaluate(() => document.getElementById("rematchBtn")?.click());
+      await control.waitForFunction(() => location.pathname.includes("/setup/"), { timeout: 20000 });
+      await control.evaluate(() => {
+        document.getElementById("match").value = "第2試合";
+      });
+      await control.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+      await control.waitForFunction(() => location.pathname.includes("/control/"), { timeout: 20000 });
+      await waitForControlReady(control);
+
+      await overlay.waitForFunction(
+        (prev) => {
+          const s = window.SMAScoreSync.read();
+          const root = document.getElementById("overlayRoot");
+          return (
+            s?.matchId &&
+            s.matchId !== prev &&
+            (s.overlayDisplayMode || "score") === "score" &&
+            s.matchEnded !== true &&
+            !!root.querySelector(".team") &&
+            !root.querySelector(".result-board") &&
+            !root.classList.contains("overlay--result")
+          );
+        },
+        { timeout: 20000 },
+        match1Id
+      );
+
+      const afterRematch = await overlay.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        const root = document.getElementById("overlayRoot");
+        return {
+          matchId: s.matchId,
+          mode: s.overlayDisplayMode || "score",
+          hasResult: !!root.querySelector(".result-board"),
+          hasResultClass: root.classList.contains("overlay--result"),
+          hasTeam: !!root.querySelector(".team"),
+          scores: (s.teams || []).map((t) => t.score),
+        };
+      });
+      assert(afterRematch.matchId !== match1Id, "71 new matchId");
+      assert(afterRematch.mode === "score", `71 mode ${afterRematch.mode}`);
+      assert(!afterRematch.hasResult && !afterRematch.hasResultClass, "71 result DOM closed");
+      assert(afterRematch.hasTeam, "71 score UI");
+      assert(afterRematch.scores.every((n) => n === 0), `71 scores reset ${afterRematch.scores}`);
+      results.push("71. 結果終了なし再試合でOverlayが通常スコアへ自動復帰 OK");
+      console.log("…", results[results.length - 1]);
+
+      await confirmKey(control, 8);
+      await overlay.waitForFunction(
+        () => window.SMAScoreSync.read()?.teams?.[0]?.score === 8,
+        { timeout: 15000 }
+      );
+      await overlay.waitForFunction(
+        () =>
+          [...document.querySelectorAll("#overlayRoot .team__score")].some(
+            (el) => el.textContent.trim() === "8"
+          ),
+        { timeout: 10000 }
+      );
+      results.push("72. 再試合後の新しい得点がOverlayへ反映 OK");
+      console.log("…", results[results.length - 1]);
+
+      // 再び結果表示 → 終了せず新しい試合
+      await finishWin2Match(control, 0);
+      await control.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlay.waitForFunction(
+        () => !!document.querySelector("#overlayRoot .result-board"),
+        { timeout: 15000 }
+      );
+      const match2Id = await control.evaluate(() => window.SMAScoreSync.read().matchId);
+
+      await control.evaluate(() => document.getElementById("newMatchBtn")?.click());
+      await control.waitForFunction(() => location.pathname.includes("/setup/"), { timeout: 20000 });
+      await control.evaluate(() => {
+        document.getElementById("tournament").value = "自動復帰大会";
+        document.getElementById("match").value = "第3試合";
+        document.getElementById("team1").value = "N1";
+        document.getElementById("team2").value = "N2";
+      });
+      await control.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+      await control.waitForFunction(() => location.pathname.includes("/control/"), { timeout: 20000 });
+      await waitForControlReady(control);
+
+      await overlay.waitForFunction(
+        (prev) => {
+          const s = window.SMAScoreSync.read();
+          const root = document.getElementById("overlayRoot");
+          return (
+            s?.matchId &&
+            s.matchId !== prev &&
+            (s.overlayDisplayMode || "score") === "score" &&
+            !!root.querySelector(".team") &&
+            !root.querySelector(".result-board") &&
+            !root.classList.contains("overlay--result")
+          );
+        },
+        { timeout: 20000 },
+        match2Id
+      );
+      const afterNew = await overlay.evaluate(() => {
+        const s = window.SMAScoreSync.read();
+        const root = document.getElementById("overlayRoot");
+        return {
+          matchId: s.matchId,
+          names: (s.teams || []).map((t) => t.name),
+          hasResult: !!root.querySelector(".result-board"),
+          mode: s.overlayDisplayMode || "score",
+        };
+      });
+      assert(afterNew.matchId !== match2Id && afterNew.matchId !== match1Id, "73 third matchId");
+      assert(!afterNew.hasResult, "73 result closed after new match");
+      assert(afterNew.mode === "score", "73 score mode");
+      assert(afterNew.names.includes("N1") && afterNew.names.includes("N2"), `73 names ${afterNew.names}`);
+      results.push("73. 同じroomで新しい試合でも結果が残らず通常表示 OK");
+      console.log("…", results[results.length - 1]);
+
+      // 連続試合リセット
+      let prevId = afterNew.matchId;
+      for (let i = 0; i < 2; i += 1) {
+        await finishWin2Match(control, 0);
+        await control.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+        await overlay.waitForFunction(
+          () => !!document.querySelector("#overlayRoot .result-board"),
+          { timeout: 15000 }
+        );
+        prevId = await control.evaluate(() => window.SMAScoreSync.read().matchId);
+        await control.evaluate(() => document.getElementById("rematchBtn")?.click());
+        await control.waitForFunction(() => location.pathname.includes("/setup/"), { timeout: 20000 });
+        await control.evaluate(() => document.querySelector(".setup__form").requestSubmit());
+        await control.waitForFunction(() => location.pathname.includes("/control/"), { timeout: 20000 });
+        await waitForControlReady(control);
+        await overlay.waitForFunction(
+          (prev) => {
+            const s = window.SMAScoreSync.read();
+            const root = document.getElementById("overlayRoot");
+            return (
+              s?.matchId !== prev &&
+              (s.overlayDisplayMode || "score") === "score" &&
+              !root.querySelector(".result-board") &&
+              !root.classList.contains("overlay--result")
+            );
+          },
+          { timeout: 20000 },
+          prevId
+        );
+      }
+      results.push("75. 連続複数試合でも毎回Overlay結果が自動リセット OK");
+      console.log("…", results[results.length - 1]);
+
+      await overlay.close();
+      await control.close();
+
+      // overlayDisplayMode 欠損の新 matchId → score（別 room）
+      const roomMissing = nextRoom();
+      const controlM = await openControl(browser, ["X", "Y"], { room: roomMissing, finished: true });
+      const overlayM = await openOverlay(browser);
+      await controlM.evaluate(() => document.getElementById("showOverlayResultBtn").click());
+      await overlayM.waitForFunction(
+        () => !!document.querySelector("#overlayRoot .result-board"),
+        { timeout: 15000 }
+      );
+      const injectedId = `missing-mode-${Date.now()}`;
+      await controlM.evaluate((injectedId) => {
+        const prev = window.SMAScoreSync.read() || {};
+        const injected = {
+          ...prev,
+          matchId: injectedId,
+          matchEnded: false,
+          setEnded: false,
+          matchWinnerIndex: null,
+          setResults: [],
+          throwLog: [],
+          teams: (prev.teams || []).map((t) => ({
+            ...t,
+            score: 0,
+            setWins: 0,
+            total: 0,
+            won: false,
+            disqualified: false,
+          })),
+          revision: (prev.revision || 1) + 5,
+          updatedAt: Date.now() + 5000,
+        };
+        delete injected.overlayDisplayMode;
+        return window.SMAScoreSync.publish(injected, { baseRevision: prev.revision || 0 });
+      }, injectedId);
+      await overlayM.waitForFunction(
+        (id) => {
+          const s = window.SMAScoreSync.read();
+          const root = document.getElementById("overlayRoot");
+          return (
+            s?.matchId === id &&
+            !!root.querySelector(".team") &&
+            !root.querySelector(".result-board") &&
+            !root.classList.contains("overlay--result")
+          );
+        },
+        { timeout: 15000 },
+        injectedId
+      );
+      results.push("74. overlayDisplayMode欠損の新matchIdでもscore表示 OK");
+      console.log("…", results[results.length - 1]);
+
+      await overlayM.close();
+      await controlM.close();
+      console.log("… 70-75 overlay auto-reset on next match OK");
+    }
+
     console.log("\nBROWSER VERIFY RESULTS");
     results.forEach((line) => console.log("✔", line));
     console.log("ALL BROWSER CHECKS PASSED");

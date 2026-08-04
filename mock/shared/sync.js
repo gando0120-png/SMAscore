@@ -282,12 +282,21 @@
     return true;
   }
 
+  function notifyCleared(callback) {
+    resetDeliveryCursor();
+    removeStored();
+    try {
+      callback(null);
+    } catch {
+      /* ignore subscriber errors */
+    }
+  }
+
   function subscribe(callback) {
     if (channel) {
       channel.onmessage = (event) => {
         if (event.data && event.data[CLEAR_SENTINEL]) {
-          resetDeliveryCursor();
-          removeStored();
+          notifyCleared(callback);
           return;
         }
         deliver(callback, event.data);
@@ -297,8 +306,8 @@
     window.addEventListener("storage", (event) => {
       if (event.key !== STORAGE_KEY) return;
       if (!event.newValue) {
-        // 削除イベント: delivery cursor のみリセット（一瞬の欠落で UI は消さない）
-        resetDeliveryCursor();
+        // 削除イベント: UI も初期化し、次の新試合を受け入れる
+        notifyCleared(callback);
         return;
       }
       try {
@@ -313,7 +322,7 @@
       stateRef.on("value", (snapshot) => {
         const data = snapshot.val();
         if (!data) {
-          // null では UI を消さず、次の新試合を受け入れるよう cursor だけ戻す
+          // 一時的な null では UI を消さない（明示 clear は CLEAR_SENTINEL / storage 削除）
           resetDeliveryCursor();
           return;
         }

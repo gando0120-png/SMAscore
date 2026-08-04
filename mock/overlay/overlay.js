@@ -418,7 +418,38 @@
   }
 
   function shouldShowResultOverlay(state) {
-    return state?.matchEnded === true && state?.overlayDisplayMode === "result";
+    if (!state?.matchEnded) return false;
+    if (state.overlayDisplayMode !== "result") return false;
+    const stateMatchId =
+      window.SMAScoreSync?.getMatchId?.(state) ||
+      (typeof state.matchId === "string" ? state.matchId : "") ||
+      "";
+    // 別試合の result を誤表示しない
+    if (currentMatchId && stateMatchId && stateMatchId !== currentMatchId) return false;
+    return true;
+  }
+
+  function resolveDisplayMode(state) {
+    // 進行中試合は常に通常スコア。欠損時も score
+    if (!state?.matchEnded) return "score";
+    return state.overlayDisplayMode === "result" ? "result" : "score";
+  }
+
+  function hardResetResultUi() {
+    prevScores = {};
+    if (!overlayRoot) return;
+    overlayRoot.classList.remove(
+      "overlay--result",
+      "overlay--result-compact",
+      "overlay--result-dense",
+      "overlay--result-2",
+      "overlay--result-3",
+      "overlay--result-4"
+    );
+    // result DOM を残さない（次の描画まで空でもよい）
+    if (overlayRoot.querySelector(".result-board")) {
+      overlayRoot.innerHTML = "";
+    }
   }
 
   function escapeHtml(value) {
@@ -519,41 +550,50 @@
     applyVisualSettings(settings);
     renderMetaBar(state, settings);
 
-    if (shouldShowResultOverlay(state)) {
-      renderResultOverlay(state);
+    const viewState = { ...state, overlayDisplayMode: resolveDisplayMode(state) };
+
+    if (shouldShowResultOverlay(viewState)) {
+      renderResultOverlay(viewState);
       prevScores = {};
       return;
     }
 
-    const teamCount = resolveTeamCount(state);
-    const entries = getOrderedEntries(state, teamCount);
+    // result から score へ戻るとき残存 class / DOM を確実に除去
+    if (overlayRoot.classList.contains("overlay--result") || overlayRoot.querySelector(".result-board")) {
+      hardResetResultUi();
+    }
+
+    const teamCount = resolveTeamCount(viewState);
+    const entries = getOrderedEntries(viewState, teamCount);
     const activeIndex =
-      state.matchEnded || state.setEnded ? -1 : state.activeTeamIndex;
+      viewState.matchEnded || viewState.setEnded ? -1 : viewState.activeTeamIndex;
     const activeTeam =
-      activeIndex >= 0 ? (state.teams || [])[activeIndex] || null : null;
+      activeIndex >= 0 ? (viewState.teams || [])[activeIndex] || null : null;
     const winnerTeam =
-      state.setEnded && state.setWinnerIndex !== null && state.setWinnerIndex !== undefined
-        ? (state.teams || [])[state.setWinnerIndex]
+      viewState.setEnded && viewState.setWinnerIndex !== null && viewState.setWinnerIndex !== undefined
+        ? (viewState.teams || [])[viewState.setWinnerIndex]
         : null;
     const matchWinnerTeam =
-      state.matchEnded &&
-      state.matchWinnerIndex !== null &&
-      state.matchWinnerIndex !== undefined
-        ? (state.teams || [])[state.matchWinnerIndex]
+      viewState.matchEnded &&
+      viewState.matchWinnerIndex !== null &&
+      viewState.matchWinnerIndex !== undefined
+        ? (viewState.teams || [])[viewState.matchWinnerIndex]
         : null;
 
     if (teamCount === 2) {
-      renderOverlayTwo(entries, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
+      renderOverlayTwo(entries, viewState, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
     } else {
-      renderOverlayMulti(teamCount, entries, state, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
+      renderOverlayMulti(teamCount, entries, viewState, activeIndex, activeTeam, winnerTeam, matchWinnerTeam);
     }
 
     applyScoreAnimations(entries, settings);
   }
 
+  let lastAppliedUpdatedAt = 0;
+
   function resetForNewMatch(matchId) {
     currentMatchId = matchId || "";
-    prevScores = {};
+    hardResetResultUi();
   }
 
   function applyState(state) {
@@ -562,16 +602,34 @@
       return;
     }
 
-    const next = state || createInitialState();
+    // 明示 clear（null）時のみ結果UIを破棄して待機表示
+    if (state === null) {
+      hardResetResultUi();
+      currentMatchId = "";
+      lastAppliedUpdatedAt = 0;
+      renderOverlay(createInitialState());
+      return;
+    }
+
+    const next = { ...(state || createInitialState()) };
     const incomingMatchId =
       window.SMAScoreSync?.getMatchId?.(next) ||
       (typeof next.matchId === "string" ? next.matchId : "") ||
       "";
+    const incomingTs = typeof next.updatedAt === "number" ? next.updatedAt : 0;
 
     if (incomingMatchId && currentMatchId && incomingMatchId !== currentMatchId) {
+      // 新 matchId: 結果UIを必ず破棄してから描画（sync 層が受理した state を信頼）
       resetForNewMatch(incomingMatchId);
     } else if (incomingMatchId && !currentMatchId) {
       currentMatchId = incomingMatchId;
+    }
+
+    // 新試合・進行中は必ず score。欠損も score
+    next.overlayDisplayMode = resolveDisplayMode(next);
+
+    if (incomingTs) {
+      lastAppliedUpdatedAt = Math.max(lastAppliedUpdatedAt, incomingTs);
     }
 
     renderOverlay(next);

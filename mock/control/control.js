@@ -1564,6 +1564,11 @@
     if (matchTransitionBusy) return;
     setMatchTransitionBusy(true);
     try {
+      // 結果 Overlay を次試合へ引き継がない
+      overlayDisplayMode = "score";
+      if (!shouldSuppressPublishForPreview()) {
+        publishSync();
+      }
       window.SMAScoreMatchStart?.clearDraft?.();
       await window.SMAScoreMatchStart?.clearGameState?.();
       window.location.href = "../setup/?mode=new";
@@ -1578,6 +1583,11 @@
     if (matchTransitionBusy) return;
     setMatchTransitionBusy(true);
     try {
+      // 結果 Overlay を次試合へ引き継がない
+      overlayDisplayMode = "score";
+      if (!shouldSuppressPublishForPreview()) {
+        publishSync();
+      }
       window.SMAScoreMatchStart?.saveDraft?.({
         mode: "rematch",
         tournament: META.tournament,
@@ -1705,6 +1715,20 @@
 
   function publishSync() {
     if (isApplyingRemote || !window.SMAScoreSync) return;
+
+    // 別試合の state が既に配信されているときは旧試合で上書きしない
+    const cursor = window.SMAScoreSync.read?.();
+    const cursorMatchId =
+      window.SMAScoreSync.getMatchId?.(cursor) || cursor?.matchId || "";
+    if (
+      cursor?.teams?.length &&
+      cursorMatchId &&
+      META.matchId &&
+      cursorMatchId !== META.matchId
+    ) {
+      return;
+    }
+
     if (suppressPublish) {
       pendingPublish = true;
       // bootstrap 中でも localStorage には反映し、テストや同一タブの read() を最新に保つ
