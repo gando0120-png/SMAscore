@@ -45,6 +45,7 @@
       setWinnerIndex: null,
       matchEnded: false,
       matchWinnerIndex: null,
+      matchEndReason: null,
       pendingSelection: null,
       throwLog: [],
       setResults: [],

@@ -1370,7 +1370,8 @@ button {
 .control--match-result .keypad,
 .control--match-result #throwOrderPanel,
 .control--match-result #inputTeamBanner,
-.control--match-result .input-display {
+.control--match-result .input-display,
+.control--match-result .force-end-wrap {
   display: none !important;
 }
 
@@ -1500,4 +1501,268 @@ button {
   text-align: center;
   font-size: 0.85rem;
   color: rgba(255, 255, 255, 0.7);
+}
+
+.match-result__end-reason {
+  margin-top: 2px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #ffb74d;
+}
+
+.match-result__end-reason[hidden] {
+  display: none !important;
+}
+
+/* ── 時間切れ終了ボタン（誤操作しにくい位置） ── */
+
+.force-end-wrap {
+  margin: 0 clamp(10px, 3vw, 14px) var(--gap-xs);
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 183, 77, 0.35);
+  background: rgba(255, 152, 0, 0.06);
+  text-align: center;
+}
+
+.force-end-wrap[hidden] {
+  display: none !important;
+}
+
+.force-end-btn {
+  min-height: 40px;
+  width: 100%;
+  max-width: 240px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 183, 77, 0.45);
+  background: rgba(0, 0, 0, 0.25);
+  color: #ffcc80;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.force-end-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.force-end-hint {
+  margin-top: 4px;
+  font-size: 0.7rem;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.35;
+}
+
+/* ── 試合履歴モーダル ── */
+
+.history-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+
+.history-modal[hidden] {
+  display: none !important;
+}
+
+.history-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.history-modal__panel {
+  position: relative;
+  z-index: 1;
+  width: min(100%, 430px);
+  height: 100%;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: #121820;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.history-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.history-modal__title {
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.history-modal__close {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  font-size: 1.25rem;
+  line-height: 1;
+}
+
+.history-modal__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding: 12px 14px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.history-standings {
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.history-standings__focus {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.history-standings__label {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+}
+
+.history-standings__select {
+  flex: 1;
+  min-height: 36px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #0d1218;
+  color: #fff;
+  padding: 0 8px;
+  font-size: 0.9rem;
+}
+
+.history-standings__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  font-size: 0.82rem;
+}
+
+.history-standings__item {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.history-standings__item strong {
+  font-weight: 800;
+  color: #fff;
+}
+
+.history-list__heading {
+  font-size: 0.8rem;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 6px;
+}
+
+.match-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.history-card {
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+}
+
+.history-card--active {
+  border-color: rgba(66, 165, 245, 0.55);
+  background: rgba(66, 165, 245, 0.1);
+}
+
+.history-card__title {
+  font-size: 0.95rem;
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+
+.history-card__meta {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 4px;
+}
+
+.history-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.82rem;
+  padding: 1px 0;
+}
+
+.history-card__empty {
+  padding: 16px 8px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.85rem;
+}
+
+.history-detail {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.history-detail[hidden] {
+  display: none !important;
+}
+
+.history-detail__title {
+  font-size: 1rem;
+  font-weight: 800;
+  margin-bottom: 4px;
+}
+
+.history-detail__line {
+  font-size: 0.85rem;
+  margin: 2px 0;
+}
+
+.history-detail__set {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.history-detail__set-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin-bottom: 2px;
 }

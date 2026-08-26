@@ -47,8 +47,20 @@
   const rematchBtn = document.getElementById("rematchBtn");
   const newMatchBtn = document.getElementById("newMatchBtn");
   const matchResultStatus = document.getElementById("matchResultStatus");
+  const matchResultTitle = document.getElementById("matchResultTitle");
+  const matchResultEndReason = document.getElementById("matchResultEndReason");
   const showOverlayResultBtn = document.getElementById("showOverlayResultBtn");
   const hideOverlayResultBtn = document.getElementById("hideOverlayResultBtn");
+  const forceEndMatchBtn = document.getElementById("forceEndMatchBtn");
+  const forceEndWrap = document.getElementById("forceEndWrap");
+  const settingsHistoryBtn = document.getElementById("settingsHistoryBtn");
+  const historyModal = document.getElementById("historyModal");
+  const historyBackdrop = document.getElementById("historyBackdrop");
+  const historyCloseBtn = document.getElementById("historyCloseBtn");
+  const historyFocusTeam = document.getElementById("historyFocusTeam");
+  const historyStandings = document.getElementById("historyStandings");
+  const matchHistoryList = document.getElementById("matchHistoryList");
+  const matchHistoryDetail = document.getElementById("matchHistoryDetail");
   const inputViewEl = document.getElementById("inputView");
   const editViewEl = document.getElementById("editView");
   const editInputDisplay = document.getElementById("editInputDisplay");
@@ -105,10 +117,13 @@
   let setWinnerIndex = null;
   let matchEnded = false;
   let matchWinnerIndex = null;
+  /** 試合終了理由: null | "normal" | "time_limit" | "disqualification" */
+  let matchEndReason = null;
   /** @type {Array<{setNumber:number,scores:Array<{teamIndex:number,score:number,disqualified:boolean}>,winnerTeamIndex:number|null,endReason:string}>} */
   let setResults = [];
   /** Overlay 表示モード: "score" = 通常スコア, "result" = 最終結果 */
   let overlayDisplayMode = "score";
+  let selectedHistoryMatchId = null;
   const history = [];
   const throwLog = [];
   let matchTransitionBusy = false;
@@ -262,7 +277,7 @@
           disqualified: !!team.disqualified,
         })),
         winnerTeamIndex: winnerIndex,
-        endReason: anyDq ? "disqualification" : "score",
+        endReason: anyDq ? "disqualification" : "normal",
       });
       simTeams.forEach((team) => {
         team.total += team.disqualified ? 0 : team.score;
@@ -338,6 +353,7 @@
       setWinnerIndex: simSetWinnerIndex,
       matchEnded: simMatchEnded,
       matchWinnerIndex: simMatchWinnerIndex,
+      matchEndReason: null,
       setResults: simSetResults,
       isPreview: true,
     };
@@ -370,6 +386,7 @@
         setWinnerIndex,
         matchEnded,
         matchWinnerIndex,
+        matchEndReason,
         setResults,
         isPreview: false,
       };
@@ -415,7 +432,7 @@
     return setResults.map((result) => ({
       setNumber: result.setNumber,
       winnerTeamIndex: result.winnerTeamIndex ?? null,
-      endReason: result.endReason || "score",
+      endReason: result.endReason || "normal",
       scores: (result.scores || []).map((score) => ({ ...score })),
     }));
   }
@@ -431,6 +448,7 @@
       setWinnerIndex,
       matchEnded,
       matchWinnerIndex,
+      matchEndReason,
       throwLog: cloneThrowLog(),
       setResults: cloneSetResults(),
     };
@@ -450,20 +468,25 @@
     setWinnerIndex = state.setWinnerIndex;
     matchEnded = !!state.matchEnded;
     matchWinnerIndex = state.matchWinnerIndex ?? null;
+    matchEndReason = state.matchEndReason || null;
     throwLog.length = 0;
     state.throwLog.forEach((entry) => throwLog.push({ ...entry }));
     setResults = Array.isArray(state.setResults)
       ? state.setResults.map((result) => ({
           setNumber: result.setNumber,
           winnerTeamIndex: result.winnerTeamIndex ?? null,
-          endReason: result.endReason || "score",
+          endReason: result.endReason || "normal",
           scores: (result.scores || []).map((score) => ({ ...score })),
         }))
       : [];
   }
 
-  function buildSetResultEntry(winnerIndex) {
+  function buildSetResultEntry(winnerIndex, endReason) {
     const anyDq = teams.some((team) => team.disqualified);
+    let reason = endReason;
+    if (!reason) {
+      reason = anyDq ? "disqualification" : "normal";
+    }
     return {
       setNumber: currentSetNumber,
       scores: teams.map((team, teamIndex) => ({
@@ -472,12 +495,12 @@
         disqualified: !!team.disqualified,
       })),
       winnerTeamIndex: winnerIndex,
-      endReason: anyDq ? "disqualification" : "score",
+      endReason: reason,
     };
   }
 
-  function recordSetResult(winnerIndex) {
-    const entry = buildSetResultEntry(winnerIndex);
+  function recordSetResult(winnerIndex, endReason) {
+    const entry = buildSetResultEntry(winnerIndex, endReason);
     const existing = setResults.findIndex((result) => result.setNumber === entry.setNumber);
     if (existing >= 0) {
       setResults[existing] = entry;
@@ -593,12 +616,200 @@
     ).length;
   }
 
-  function finishMatch(winnerIndex) {
+  function finishMatch(winnerIndex, reason) {
     matchEnded = true;
-    matchWinnerIndex = winnerIndex;
+    matchWinnerIndex =
+      winnerIndex === null || winnerIndex === undefined ? null : winnerIndex;
     setEnded = false;
     setWinnerIndex = null;
     pendingSelection = null;
+    if (reason) {
+      matchEndReason = reason;
+    } else if (!matchEndReason) {
+      matchEndReason = setResults.some((result) => result.endReason === "disqualification")
+        ? "disqualification"
+        : "normal";
+    }
+    persistMatchHistoryRecord();
+  }
+
+  function resolveMatchEndReason() {
+    if (matchEndReason === "time_limit") return "time_limit";
+    if (
+      matchEndReason === "disqualification" ||
+      setResults.some((result) => result.endReason === "disqualification")
+    ) {
+      return "disqualification";
+    }
+    return matchEndReason || "normal";
+  }
+
+  function persistMatchHistoryRecord() {
+    if (!matchEnded || !META.matchId) return;
+    const reason = resolveMatchEndReason();
+    matchEndReason = reason;
+    syncTotalsFromSetResults();
+    window.SMAScoreMatchHistory?.upsertMatchRecord?.({
+      matchId: META.matchId,
+      tournament: META.tournament,
+      match: META.match,
+      format: META.format,
+      teamNames: teams.map((team) => team.name),
+      playedAt: Date.now(),
+      winnerTeamIndex: matchWinnerIndex,
+      matchEndReason: reason,
+      setResults: cloneSetResults(),
+      teams: teams.map((team) => ({
+        name: team.name,
+        setWins: team.setWins,
+        total: team.total,
+      })),
+    });
+  }
+
+  function pickSetLeaderByCurrentScores() {
+    let bestScore = -1;
+    const leaders = [];
+    teams.forEach((team, index) => {
+      if (team.disqualified) return;
+      const score = Number(team.score) || 0;
+      if (score > bestScore) {
+        bestScore = score;
+        leaders.length = 0;
+        leaders.push(index);
+      } else if (score === bestScore) {
+        leaders.push(index);
+      }
+    });
+    if (leaders.length === 1) return leaders[0];
+    return null;
+  }
+
+  function pickMatchWinnerFromStandings() {
+    const maxWins = Math.max(...teams.map((team) => Number(team.setWins) || 0), 0);
+    const setLeaders = teams
+      .map((team, index) => ((Number(team.setWins) || 0) === maxWins ? index : -1))
+      .filter((index) => index >= 0);
+    if (setLeaders.length === 1) return setLeaders[0];
+
+    const totals = totalsFromSetResults();
+    const maxTotal = Math.max(...totals, 0);
+    const totalLeaders = totals
+      .map((total, index) => (total === maxTotal ? index : -1))
+      .filter((index) => index >= 0);
+    if (totalLeaders.length === 1) return totalLeaders[0];
+    return null;
+  }
+
+  function restoreScoresFromLastSetResult() {
+    if (!setResults.length) return;
+    const last = setResults[setResults.length - 1];
+    (last.scores || []).forEach((row) => {
+      if (!teams[row.teamIndex]) return;
+      teams[row.teamIndex].score = row.score;
+      teams[row.teamIndex].disqualified = !!row.disqualified;
+      teams[row.teamIndex].won = last.winnerTeamIndex === row.teamIndex;
+      teams[row.teamIndex].misses = 0;
+    });
+    setEnded = false;
+    setWinnerIndex = null;
+  }
+
+  function rebuildSetWinsFromResults() {
+    teams.forEach((team) => {
+      team.setWins = 0;
+      team.won = false;
+    });
+    setResults.forEach((result) => {
+      if (result.winnerTeamIndex === null || result.winnerTeamIndex === undefined) return;
+      if (!teams[result.winnerTeamIndex]) return;
+      teams[result.winnerTeamIndex].setWins += 1;
+    });
+    if (setResults.length) {
+      const last = setResults[setResults.length - 1];
+      if (last.winnerTeamIndex !== null && last.winnerTeamIndex !== undefined) {
+        teams[last.winnerTeamIndex].won = true;
+      }
+    }
+  }
+
+  /**
+   * 進行中セットを時間切れで確定し、試合を終了する（確認ダイアログなし）。
+   * @param {{ betweenSets?: boolean }} options
+   */
+  function applyTimeLimitMatchEnd(options = {}) {
+    const betweenSets = !!options.betweenSets;
+
+    if (betweenSets) {
+      // セット間終了: 空の次セットは残さない
+      if (currentSetNumber > setResults.length) {
+        currentSetNumber = Math.max(1, setResults.length);
+      }
+      rebuildSetWinsFromResults();
+      syncTotalsFromSetResults();
+      finishMatch(pickMatchWinnerFromStandings(), "time_limit");
+      restoreScoresFromLastSetResult();
+      return;
+    }
+
+    if (!setEnded) {
+      const leader = pickSetLeaderByCurrentScores();
+      const entry = {
+        setNumber: currentSetNumber,
+        scores: teams.map((team, teamIndex) => ({
+          teamIndex,
+          score: team.disqualified ? 0 : team.score,
+          disqualified: !!team.disqualified,
+        })),
+        winnerTeamIndex: leader,
+        endReason: "time_limit",
+      };
+      const existing = setResults.findIndex((result) => result.setNumber === entry.setNumber);
+      if (existing >= 0) setResults[existing] = entry;
+      else setResults.push(entry);
+    }
+
+    rebuildSetWinsFromResults();
+    syncTotalsFromSetResults();
+    finishMatch(pickMatchWinnerFromStandings(), "time_limit");
+  }
+
+  /**
+   * 制限時間などによる強制試合終了。
+   * 進行中セットを現在得点で確定し、試合を終了する。
+   */
+  function forceEndMatchByTimeLimit() {
+    if (matchEnded || matchTransitionBusy || settingsOpen) return;
+    if (isEditMode() || isEditingPast()) return;
+
+    const ok = window.confirm("現在の得点で試合を終了しますか？");
+    if (!ok) return;
+
+    history.push(snapshot());
+    applyTimeLimitMatchEnd({ betweenSets: !!setEnded });
+    renderAll();
+  }
+
+  /**
+   * 過去投擲修正後、時間切れ終了を再現する。
+   * throwLog だけでは時間切れセットを復元できないため。
+   */
+  function reapplyTimeLimitAfterReplay(previousEndReason, previousSetResults) {
+    if (previousEndReason !== "time_limit") return;
+    if (matchEnded) return;
+
+    const hadTimeLimitSet = (previousSetResults || []).some(
+      (result) => result.endReason === "time_limit"
+    );
+
+    if (!hadTimeLimitSet) {
+      // セット間での時間切れ終了を再現
+      applyTimeLimitMatchEnd({ betweenSets: true });
+      return;
+    }
+
+    // 進行中セットを時間切れで再確定（得点は replay 後の現在値）
+    applyTimeLimitMatchEnd({ betweenSets: false });
   }
 
   function applyNextSetTransition(winnerIndex) {
@@ -651,6 +862,8 @@
 
   function replayMatch() {
     const log = cloneThrowLog();
+    const previousEndReason = matchEndReason;
+    const previousSetResults = cloneSetResults();
 
     teams.forEach((team) => {
       team.score = 0;
@@ -663,6 +876,7 @@
 
     matchEnded = false;
     matchWinnerIndex = null;
+    matchEndReason = null;
     currentSetNumber = 1;
     setResults = [];
     applyThrowOrder(ThrowOrder.createDefault(teams.length));
@@ -737,6 +951,9 @@
       matchWinnerIndex = recomputed.winnerIndex;
     }
 
+    // 時間切れ終了は throwLog から復元できないため、必要なら再適用
+    reapplyTimeLimitAfterReplay(previousEndReason, previousSetResults);
+
     // 試合終了後は進行中セット得点をリセット表示にしない（結果確認用に最終セット得点を残す）
     if (matchEnded && setResults.length) {
       const last = setResults[setResults.length - 1];
@@ -752,6 +969,20 @@
     } else if (!matchEnded) {
       // 試合が未終了に戻った場合は結果 Overlay を解除
       overlayDisplayMode = "score";
+      matchEndReason = null;
+    }
+
+    if (matchEnded) {
+      if (setResults.some((result) => result.endReason === "time_limit")) {
+        matchEndReason = "time_limit";
+      } else if (previousEndReason === "time_limit") {
+        matchEndReason = "time_limit";
+      } else if (setResults.some((result) => result.endReason === "disqualification")) {
+        matchEndReason = "disqualification";
+      } else {
+        matchEndReason = "normal";
+      }
+      persistMatchHistoryRecord();
     }
 
     syncTotalsFromSetResults();
@@ -1273,8 +1504,16 @@
   }
 
   function endReasonLabel(reason) {
-    if (reason === "disqualification") return "3連続ミスによる失格";
+    if (reason === "disqualification" || reason === "disqualified") return "3連続ミスによる失格";
+    if (reason === "time_limit") return "時間切れ";
     if (reason === "draw") return "引き分け";
+    if (reason === "normal" || reason === "score") return "";
+    return "";
+  }
+
+  function matchEndReasonLabel(reason) {
+    if (reason === "time_limit") return "時間切れ終了";
+    if (reason === "disqualification" || reason === "disqualified") return "失格による終了";
     return "";
   }
 
@@ -1287,14 +1526,30 @@
     controlEl.classList.toggle("control--match-result", showResult);
     if (!showResult) return;
 
+    const endReason = view.matchEndReason || matchEndReason || resolveMatchEndReason();
+    if (matchResultTitle) {
+      matchResultTitle.textContent =
+        endReason === "time_limit" ? "試合終了（時間切れ）" : "試合終了";
+    }
+    if (matchResultEndReason) {
+      const label = matchEndReasonLabel(endReason);
+      matchResultEndReason.hidden = !label;
+      matchResultEndReason.textContent = label;
+    }
+
     if (matchResultTournament) matchResultTournament.textContent = META.tournament || "—";
     if (matchResultMatch) matchResultMatch.textContent = META.match || "—";
 
     const winnerName =
       view.matchWinnerIndex !== null && view.matchWinnerIndex !== undefined
         ? view.teams[view.matchWinnerIndex]?.name ?? `チーム ${view.matchWinnerIndex + 1}`
-        : "—";
-    if (matchResultWinner) matchResultWinner.textContent = `勝者：${winnerName}`;
+        : "引き分け";
+    if (matchResultWinner) {
+      matchResultWinner.textContent =
+        view.matchWinnerIndex === null || view.matchWinnerIndex === undefined
+          ? "勝者：引き分け"
+          : `勝者：${winnerName}`;
+    }
 
     if (matchResultSets) {
       if (!view.setResults.length) {
@@ -1375,6 +1630,18 @@
     }
   }
 
+  function renderForceEndButton() {
+    if (!forceEndWrap || !forceEndMatchBtn) return;
+    const show =
+      !matchEnded &&
+      !isEditMode() &&
+      !isEditingPast() &&
+      !settingsOpen &&
+      !matchTransitionBusy;
+    forceEndWrap.hidden = !show;
+    forceEndMatchBtn.disabled = !show;
+  }
+
   function renderViewMode() {
     const editing = isEditMode();
     const pastEditing = isEditingPast();
@@ -1452,6 +1719,7 @@
     backBtn.disabled =
       editing || settingsOpen || editableIndices.length === 0 || atFirstEditable;
     renderThrowOrderPanel();
+    renderForceEndButton();
     renderKeySelection(keys, editing ? null : pendingSelection);
     renderKeySelection(editKeys, editing ? pendingEditSelection : null);
   }
@@ -1628,6 +1896,7 @@
       setWinnerIndex,
       matchEnded,
       matchWinnerIndex,
+      matchEndReason: matchEndReason || null,
       pendingSelection: isEditMode() ? pendingEditSelection : pendingSelection,
       currentSetNumber,
       throwLog: cloneThrowLog(),
@@ -1679,6 +1948,7 @@
     setWinnerIndex = state.setWinnerIndex ?? null;
     matchEnded = !!state.matchEnded;
     matchWinnerIndex = state.matchWinnerIndex ?? null;
+    matchEndReason = state.matchEndReason || null;
 
     if (Array.isArray(state.throwLog)) {
       throwLog.length = 0;
@@ -1691,7 +1961,7 @@
       setResults = state.setResults.map((result) => ({
         setNumber: result.setNumber,
         winnerTeamIndex: result.winnerTeamIndex ?? null,
-        endReason: result.endReason || "score",
+        endReason: result.endReason || "normal",
         scores: (result.scores || []).map((score) => ({ ...score })),
       }));
     } else {
@@ -2085,6 +2355,172 @@
     renderAll();
   }
 
+  function formatHistoryDate(ts) {
+    if (!ts) return "";
+    try {
+      const date = new Date(ts);
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const d = String(date.getDate()).padStart(2, "0");
+      const hh = String(date.getHours()).padStart(2, "0");
+      const mm = String(date.getMinutes()).padStart(2, "0");
+      return `${y}/${m}/${d} ${hh}:${mm}`;
+    } catch {
+      return "";
+    }
+  }
+
+  function renderMatchHistoryStandings() {
+    if (!historyStandings || !historyFocusTeam) return;
+    const History = window.SMAScoreMatchHistory;
+    if (!History) {
+      historyStandings.innerHTML = "";
+      return;
+    }
+
+    const entries = History.readAll();
+    const names = History.collectTeamNames(entries);
+    const focus = historyFocusTeam.value || History.getFocusTeamName() || names[0] || "";
+    if (focus && historyFocusTeam.value !== focus) {
+      historyFocusTeam.value = focus;
+    }
+
+    const stats = History.summarizeForTeam(focus, entries);
+    historyStandings.innerHTML = `
+      <div class="history-standings__item"><span>試合数</span><strong>${stats.matches}</strong></div>
+      <div class="history-standings__item"><span>勝 / 敗 / 分</span><strong>${stats.wins} / ${stats.losses} / ${stats.draws}</strong></div>
+      <div class="history-standings__item"><span>獲得セット</span><strong>${stats.setsFor}</strong></div>
+      <div class="history-standings__item"><span>失セット</span><strong>${stats.setsAgainst}</strong></div>
+      <div class="history-standings__item"><span>総得点</span><strong>${stats.pointsFor}</strong></div>
+      <div class="history-standings__item"><span>失点</span><strong>${stats.pointsAgainst}</strong></div>
+      <div class="history-standings__item"><span>セット差</span><strong>${stats.setDiff >= 0 ? "+" : ""}${stats.setDiff}</strong></div>
+      <div class="history-standings__item"><span>得失点差</span><strong>${stats.pointDiff >= 0 ? "+" : ""}${stats.pointDiff}</strong></div>
+    `;
+  }
+
+  function renderMatchHistoryFocusOptions() {
+    if (!historyFocusTeam) return;
+    const History = window.SMAScoreMatchHistory;
+    if (!History) return;
+    const entries = History.readAll();
+    const names = History.collectTeamNames(entries);
+    const current = History.getFocusTeamName() || names[0] || "";
+    historyFocusTeam.innerHTML = names.length
+      ? names.map((name) => `<option value="${name}">${name}</option>`).join("")
+      : '<option value="">（履歴なし）</option>';
+    if (current && names.includes(current)) historyFocusTeam.value = current;
+  }
+
+  function renderMatchHistoryList() {
+    if (!matchHistoryList) return;
+    const History = window.SMAScoreMatchHistory;
+    const entries = History?.readAll?.() || [];
+    if (!entries.length) {
+      matchHistoryList.innerHTML =
+        '<p class="history-card__empty">保存された試合履歴はまだありません</p>';
+      return;
+    }
+
+    matchHistoryList.innerHTML = entries
+      .map((entry) => {
+        const teams = entry.teams || [];
+        const winner =
+          entry.winnerTeamIndex === null || entry.winnerTeamIndex === undefined
+            ? "引き分け"
+            : teams[entry.winnerTeamIndex]?.name || "—";
+        const setLine = teams.map((team) => `${team.name} ${team.setWins}`).join(" / ");
+        const totalLine = teams.map((team) => `${team.name} ${team.total}`).join(" / ");
+        const reason = History.matchEndReasonLabel(entry.matchEndReason);
+        const active = selectedHistoryMatchId === entry.matchId ? " history-card--active" : "";
+        return `
+          <button type="button" class="history-card${active}" data-history-id="${entry.matchId}">
+            <p class="history-card__title">${entry.match || "（試合名なし）"}</p>
+            <p class="history-card__meta">${entry.tournament || "—"} ｜ ${formatHistoryDate(entry.playedAt)}</p>
+            <div class="history-card__row"><span>勝者</span><span>${winner}</span></div>
+            <div class="history-card__row"><span>セット</span><span>${setLine}</span></div>
+            <div class="history-card__row"><span>合計</span><span>${totalLine}</span></div>
+            <div class="history-card__row"><span>終了理由</span><span>${reason}</span></div>
+          </button>
+        `;
+      })
+      .join("");
+
+    matchHistoryList.querySelectorAll("[data-history-id]").forEach((button) => {
+      button.addEventListener("click", () => {
+        selectedHistoryMatchId = button.getAttribute("data-history-id");
+        renderMatchHistoryList();
+        renderMatchHistoryDetail(selectedHistoryMatchId);
+      });
+    });
+  }
+
+  function renderMatchHistoryDetail(matchId) {
+    if (!matchHistoryDetail) return;
+    const History = window.SMAScoreMatchHistory;
+    const entry = (History?.readAll?.() || []).find((item) => item.matchId === matchId);
+    if (!entry) {
+      matchHistoryDetail.hidden = true;
+      matchHistoryDetail.innerHTML = "";
+      return;
+    }
+
+    const winner =
+      entry.winnerTeamIndex === null || entry.winnerTeamIndex === undefined
+        ? "引き分け"
+        : entry.teams?.[entry.winnerTeamIndex]?.name || "—";
+    const setsHtml = (entry.setResults || [])
+      .map((result) => {
+        const rows = (result.scores || [])
+          .map((row) => {
+            const name = entry.teams?.[row.teamIndex]?.name || `チーム${row.teamIndex + 1}`;
+            const dq = row.disqualified ? "（失格）" : "";
+            return `<div class="history-card__row"><span>${name}</span><span>${row.score}点${dq}</span></div>`;
+          })
+          .join("");
+        const reason = History.endReasonLabel(result.endReason);
+        return `
+          <div class="history-detail__set">
+            <p class="history-detail__set-title">セット${result.setNumber}${reason ? `（${reason}）` : ""}</p>
+            ${rows}
+          </div>
+        `;
+      })
+      .join("");
+
+    matchHistoryDetail.hidden = false;
+    matchHistoryDetail.innerHTML = `
+      <p class="history-detail__title">${entry.match || "試合詳細"}</p>
+      <p class="history-detail__line">${entry.tournament || "—"} ｜ ${formatHistoryDate(entry.playedAt)}</p>
+      <p class="history-detail__line">勝者：${winner}</p>
+      <p class="history-detail__line">終了理由：${History.matchEndReasonLabel(entry.matchEndReason)}</p>
+      ${setsHtml}
+      <div class="history-detail__set">
+        <p class="history-detail__set-title">合計得点</p>
+        ${(entry.teams || [])
+          .map(
+            (team) =>
+              `<div class="history-card__row"><span>${team.name}</span><span>${team.total}点（${team.setWins}セット）</span></div>`
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
+  function openMatchHistoryModal() {
+    if (!historyModal) return;
+    closeSettings();
+    renderMatchHistoryFocusOptions();
+    renderMatchHistoryStandings();
+    renderMatchHistoryList();
+    if (selectedHistoryMatchId) renderMatchHistoryDetail(selectedHistoryMatchId);
+    historyModal.hidden = false;
+  }
+
+  function closeMatchHistoryModal() {
+    if (!historyModal) return;
+    historyModal.hidden = true;
+  }
+
   function bindKeyPad(nodeList) {
     nodeList.forEach((key) => {
       key.addEventListener("click", () => {
@@ -2117,6 +2553,14 @@
   settingsBackdrop.addEventListener("click", closeSettings);
   settingsForm.addEventListener("submit", saveSettings);
   settingsNewMatchBtn.addEventListener("click", confirmNewMatch);
+  settingsHistoryBtn?.addEventListener("click", openMatchHistoryModal);
+  historyCloseBtn?.addEventListener("click", closeMatchHistoryModal);
+  historyBackdrop?.addEventListener("click", closeMatchHistoryModal);
+  historyFocusTeam?.addEventListener("change", () => {
+    window.SMAScoreMatchHistory?.setFocusTeamName?.(historyFocusTeam.value);
+    renderMatchHistoryStandings();
+  });
+  forceEndMatchBtn?.addEventListener("click", forceEndMatchByTimeLimit);
   rematchBtn?.addEventListener("click", () => {
     goToRematchSetup();
   });

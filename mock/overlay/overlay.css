@@ -647,6 +647,13 @@ body {
   letter-spacing: 0.04em;
 }
 
+.result-board__reason {
+  font-size: clamp(11px, 1.15vw, 13px);
+  font-weight: 700;
+  color: #ffb74d;
+  letter-spacing: 0.04em;
+}
+
 .result-table {
   width: 100%;
   border-collapse: collapse;

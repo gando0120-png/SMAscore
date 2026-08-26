@@ -480,7 +480,16 @@
     const winnerName =
       state.matchWinnerIndex !== null && state.matchWinnerIndex !== undefined
         ? teams[state.matchWinnerIndex]?.name || `チーム ${state.matchWinnerIndex + 1}`
-        : "—";
+        : "引き分け";
+
+    const matchEndReason = state.matchEndReason || "";
+    const endReasonText =
+      matchEndReason === "time_limit"
+        ? "時間切れ終了"
+        : matchEndReason === "disqualification"
+          ? "失格による終了"
+          : "";
+    const titleText = matchEndReason === "time_limit" ? "試合終了（時間切れ）" : "試合終了";
 
     const setHeaders = setResults
       .map((result) => `<th scope="col">S${result.setNumber}</th>`)
@@ -496,7 +505,11 @@
             const winnerClass =
               result.winnerTeamIndex === teamIndex ? " result-table__cell--winner" : "";
             const dq = row?.disqualified ? '<span class="result-table__dq">失格</span>' : "";
-            return `<td class="result-table__cell${winnerClass}">${score}${dq}</td>`;
+            const timeLimit =
+              result.endReason === "time_limit" && !row?.disqualified
+                ? ""
+                : "";
+            return `<td class="result-table__cell${winnerClass}">${score}${dq}${timeLimit}</td>`;
           })
           .join("");
         const isWinner = state.matchWinnerIndex === teamIndex;
@@ -521,13 +534,20 @@
           ? " overlay--result-dense"
           : "";
 
+    const hasTimeLimitSet = setResults.some((result) => result.endReason === "time_limit");
+
     overlayRoot.className = `overlay overlay--result overlay--result-${teamCount}${compactClass}`;
     overlayRoot.innerHTML = `
       <div class="result-board" aria-label="試合最終結果">
         <header class="result-board__header">
-          <p class="result-board__title">試合終了</p>
+          <p class="result-board__title">${titleText}</p>
           <p class="result-board__winner">勝者：${escapeHtml(winnerName)}</p>
         </header>
+        ${
+          endReasonText || hasTimeLimitSet
+            ? `<p class="result-board__reason">${endReasonText || "時間切れを含む結果"}</p>`
+            : ""
+        }
         <table class="result-table">
           <thead>
             <tr>
