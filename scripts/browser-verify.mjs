@@ -259,6 +259,81 @@ async function clearMatchHistory(page) {
   });
 }
 
+/** キーがフッターに隠れず操作可能か（必要なら control__body をスクロール） */
+async function assertKeysOperable(page, values, label) {
+  const result = await page.evaluate((values) => {
+    const body = document.querySelector(".control__body");
+    const footer = document.querySelector(".actions");
+    if (!body || !footer) return { ok: false, reason: "missing body/footer", failed: values };
+    const footerTop = footer.getBoundingClientRect().top;
+    const failed = [];
+    for (const v of values) {
+      const el = document.querySelector(`#keypad .key[data-value="${v}"]`);
+      if (!el || el.disabled) {
+        failed.push(v);
+        continue;
+      }
+      el.scrollIntoView({ block: "center", inline: "nearest" });
+      let rect = el.getBoundingClientRect();
+      if (rect.bottom > footerTop) {
+        body.scrollTop += rect.bottom - footerTop + 12;
+        rect = el.getBoundingClientRect();
+      }
+      if (rect.top < 0) {
+        body.scrollTop += rect.top - 8;
+        rect = el.getBoundingClientRect();
+      }
+      const visible =
+        rect.height > 0 &&
+        rect.width > 0 &&
+        rect.bottom <= footerTop + 2 &&
+        rect.top >= -2 &&
+        rect.left >= 0 &&
+        rect.right <= window.innerWidth + 2;
+      if (!visible) failed.push(v);
+    }
+    return {
+      ok: failed.length === 0,
+      failed,
+      canScroll: body.scrollHeight > body.clientHeight + 2,
+      bodyOverflowY: getComputedStyle(body).overflowY,
+      controlOverflow: getComputedStyle(document.querySelector(".control")).overflow,
+    };
+  }, values);
+  assert(result.ok, `${label} keys not operable: ${result.failed?.join(",") || result.reason}`);
+  assert(
+    result.bodyOverflowY === "auto" || result.bodyOverflowY === "scroll" || result.canScroll,
+    `${label} body should allow scroll when needed (overflow=${result.bodyOverflowY})`
+  );
+  return result;
+}
+
+async function assertFooterActionsOperable(page, label) {
+  const result = await page.evaluate(() => {
+    const ids = ["backBtn", "confirmBtn"];
+    const failed = [];
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (!el || el.hidden) {
+        failed.push(id);
+        continue;
+      }
+      const r = el.getBoundingClientRect();
+      const visible =
+        r.height > 0 &&
+        r.width > 0 &&
+        r.top >= 0 &&
+        r.bottom <= window.innerHeight + 2 &&
+        r.left >= 0 &&
+        r.right <= window.innerWidth + 2;
+      if (!visible) failed.push(id);
+    }
+    return { ok: failed.length === 0, failed };
+  });
+  assert(result.ok, `${label} footer actions not operable: ${result.failed.join(",")}`);
+}
+
+
 /** 指定チームがセットを取れるまで進行（相手は低得点） */
 async function winCurrentSetFor(page, teamIndex) {
   for (let i = 0; i < 60; i += 1) {
@@ -3108,6 +3183,235 @@ async function run() {
       results.push("91. 過去投擲修正で同matchId履歴が更新 OK");
       console.log("…", results[results.length - 1]);
       await control.close();
+    }
+
+    // ── 3・4チーム スマホ縦レイアウト: キーパッド操作保証 ──
+    {
+      const viewports = [
+        { width: 390, height: 844, name: "390x844" },
+        { width: 375, height: 667, name: "375x667" },
+        { width: 360, height: 640, name: "360x640" },
+      ];
+      const keyValues = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "0", "F"];
+
+      // 1) 2チーム
+      {
+        const control = await openControl(browser, ["A", "B"]);
+        await control.setViewport({ ...viewports[0], deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        await assertKeysOperable(control, keyValues, "92 2team");
+        await assertFooterActionsOperable(control, "92 2team");
+        results.push("92. 2チーム・スマホ縦で全入力キー操作可能 OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      // 2-5) 3・4チーム + 戻る/決定
+      for (const [teams, label] of [
+        [["A", "B", "C"], "3team"],
+        [["A", "B", "C", "D"], "4team"],
+      ]) {
+        for (const vp of viewports) {
+          const control = await openControl(browser, teams);
+          await control.setViewport({
+            width: vp.width,
+            height: vp.height,
+            deviceScaleFactor: 2,
+            isMobile: true,
+            hasTouch: true,
+          });
+          await new Promise((r) => setTimeout(r, 200));
+          await assertKeysOperable(control, keyValues, `${label} ${vp.name}`);
+          await assertFooterActionsOperable(control, `${label} ${vp.name}`);
+          await control.close();
+        }
+        results.push(
+          label === "3team"
+            ? "93. 3チーム・各viewportで1〜12/0/Fと戻る・決定が操作可能 OK"
+            : "94. 4チーム・各viewportで1〜12/0/Fと戻る・決定が操作可能 OK"
+        );
+        console.log("…", results[results.length - 1]);
+      }
+
+      // 6-7) 0 / F を実際に入力して決定
+      {
+        const control = await openControl(browser, ["A", "B", "C"]);
+        await control.setViewport({ width: 360, height: 640, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        await assertKeysOperable(control, ["0", "F"], "95 pre");
+        await control.evaluate(() => {
+          const body = document.querySelector(".control__body");
+          const zero = document.querySelector('#keypad .key[data-value="0"]');
+          zero.scrollIntoView({ block: "center" });
+          zero.click();
+          document.getElementById("confirmBtn").click();
+        });
+        await control.waitForFunction(
+          () => (window.SMAScoreSync.read()?.throwLog || []).some((e) => e.selection === 0),
+          { timeout: 10000 }
+        );
+        await control.evaluate(() => {
+          const f = document.querySelector('#keypad .key[data-value="F"]');
+          f.scrollIntoView({ block: "center" });
+          f.click();
+          document.getElementById("confirmBtn").click();
+        });
+        await control.waitForFunction(
+          () => (window.SMAScoreSync.read()?.throwLog || []).some((e) => e.selection === "F"),
+          { timeout: 10000 }
+        );
+        results.push("95. 3チーム小画面で0/Fを入力して決定できる OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      // 8-9) 小さいviewportで画面外要素へスクロール到達・overflowで操作不能にならない
+      {
+        const control = await openControl(browser, ["A", "B", "C", "D"]);
+        await control.setViewport({ width: 360, height: 640, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        const scrollInfo = await control.evaluate(() => {
+          const body = document.querySelector(".control__body");
+          const controlEl = document.querySelector(".control");
+          const foul = document.querySelector('#keypad .key[data-value="F"]');
+          const before = body.scrollTop;
+          foul.scrollIntoView({ block: "end" });
+          const footerTop = document.querySelector(".actions").getBoundingClientRect().top;
+          let rect = foul.getBoundingClientRect();
+          if (rect.bottom > footerTop) body.scrollTop += rect.bottom - footerTop + 12;
+          rect = foul.getBoundingClientRect();
+          return {
+            bodyOverflowY: getComputedStyle(body).overflowY,
+            controlOverflow: getComputedStyle(controlEl).overflow,
+            editModeOverflow: null,
+            scrolled: body.scrollTop !== before || body.scrollHeight > body.clientHeight,
+            foulVisible: rect.bottom <= footerTop + 2 && rect.top >= -2,
+            canScroll: body.scrollHeight > body.clientHeight + 1,
+          };
+        });
+        assert(
+          scrollInfo.bodyOverflowY === "auto" || scrollInfo.bodyOverflowY === "scroll",
+          `96 body overflow-y should allow scroll, got ${scrollInfo.bodyOverflowY}`
+        );
+        assert(scrollInfo.foulVisible, "96 F should be reachable via scroll");
+        assert(
+          scrollInfo.canScroll || scrollInfo.foulVisible,
+          "96 must not trap keys off-screen without scroll"
+        );
+        results.push("96. 小viewportで画面外キーへスクロール到達でき操作不能にならない OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      // 10) 修正モードの履歴スクロールが従来どおり
+      {
+        const control = await openControl(browser, ["A", "B", "C"]);
+        await control.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        for (const v of ["3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "1", "2"]) {
+          await confirmKey(control, v);
+        }
+        await control.evaluate(() => document.getElementById("editModeBtn").click());
+        await control.waitForSelector(".control--edit-mode");
+        const histScroll = await control.evaluate(() => {
+          const body = document.querySelector(".control__body");
+          const scroll = document.getElementById("historyScroll");
+          const bodyOverflow = getComputedStyle(body).overflowY;
+          if (!scroll) return { ok: false, reason: "no historyScroll" };
+          // 履歴が少なければダミー要素を足して高さ確認用（DOMのみ・state非変更）
+          const list = document.getElementById("historyList");
+          const pad = document.createElement("div");
+          pad.id = "histPadTest";
+          pad.style.height = "900px";
+          list?.appendChild(pad);
+          const can = scroll.scrollHeight > scroll.clientHeight + 2;
+          scroll.scrollTop = 200;
+          const moved = scroll.scrollTop >= 100;
+          pad.remove();
+          return {
+            ok: can && moved && (bodyOverflow === "hidden" || bodyOverflow === "clip"),
+            can,
+            moved,
+            bodyOverflow,
+          };
+        });
+        assert(histScroll.ok, `97 history scroll broken: ${JSON.stringify(histScroll)}`);
+        results.push("97. 修正モードの履歴スクロールが従来どおり動く OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      // 11) preview修正時のフッター配置
+      {
+        const control = await openControl(browser, ["A", "B", "C"]);
+        await control.setViewport({ width: 390, height: 844, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        await confirmKey(control, "5");
+        await confirmKey(control, "6");
+        await control.evaluate(() => document.getElementById("backBtn").click());
+        await control.waitForFunction(() => document.querySelector(".control--past-edit"));
+        const layout = await control.evaluate(() => {
+          const back = document.getElementById("backBtn").getBoundingClientRect();
+          const confirm = document.getElementById("confirmBtn").getBoundingClientRect();
+          const cancel = document.getElementById("cancelEditBtn");
+          const footer = document.querySelector(".actions").getBoundingClientRect();
+          return {
+            backCenterish: back.left > footer.left + footer.width * 0.25 && back.right < footer.left + footer.width * 0.75,
+            confirmRight: confirm.left > back.right - 2,
+            cancelVisible: cancel && !cancel.hidden && cancel.getBoundingClientRect().width > 0,
+            footerOnScreen: footer.bottom <= window.innerHeight + 2 && footer.top >= 0,
+          };
+        });
+        assert(layout.footerOnScreen, "98 footer off screen");
+        assert(layout.confirmRight, "98 confirm should stay right of back");
+        assert(layout.cancelVisible, "98 cancel should show in past edit");
+        results.push("98. preview修正時のフッター配置が崩れない OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      // 12) 試合結果画面・履歴画面のスクロールを壊さない
+      {
+        const control = await openControl(browser, ["A", "B"]);
+        await control.setViewport({ width: 375, height: 667, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
+        await finishWin2Match(control, 0);
+        const resultScroll = await control.evaluate(() => {
+          const body = document.querySelector(".control__body");
+          const panel = document.getElementById("matchResultPanel");
+          return {
+            panelVisible: panel && !panel.hidden,
+            bodyOverflowY: getComputedStyle(body).overflowY,
+            canScroll: body.scrollHeight > body.clientHeight + 1 || bodyOverflowAllows(body),
+          };
+          function bodyOverflowAllows(el) {
+            const o = getComputedStyle(el).overflowY;
+            return o === "auto" || o === "scroll";
+          }
+        });
+        assert(resultScroll.panelVisible, "99 result panel");
+        assert(
+          resultScroll.bodyOverflowY === "auto" || resultScroll.bodyOverflowY === "scroll",
+          `99 result body overflow ${resultScroll.bodyOverflowY}`
+        );
+
+        await control.evaluate(() => document.querySelector(".header__settings")?.click());
+        await control.waitForSelector("#settingsModal:not([hidden])");
+        await control.evaluate(() => document.getElementById("settingsHistoryBtn").click());
+        await control.waitForSelector("#historyModal:not([hidden])");
+        const histModal = await control.evaluate(() => {
+          const scroll = document.getElementById("matchHistoryScroll");
+          const modal = document.getElementById("historyModal");
+          return {
+            open: modal && !modal.hidden,
+            overflowY: scroll ? getComputedStyle(scroll).overflowY : null,
+            canScrollStyle:
+              scroll &&
+              (getComputedStyle(scroll).overflowY === "auto" ||
+                getComputedStyle(scroll).overflowY === "scroll"),
+          };
+        });
+        assert(histModal.open && histModal.canScrollStyle, `99 history modal scroll ${JSON.stringify(histModal)}`);
+        results.push("99. 試合結果画面・履歴画面のスクロールを壊さない OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      console.log("… 92-99 mobile keypad layout OK");
     }
 
     console.log("\nBROWSER VERIFY RESULTS");

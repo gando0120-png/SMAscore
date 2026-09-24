@@ -1648,6 +1648,9 @@
     controlEl.classList.toggle("control--edit-mode", editing);
     controlEl.classList.toggle("control--input-mode", !editing);
     controlEl.classList.toggle("control--past-edit", pastEditing && !editing);
+    controlEl.classList.toggle("control--teams-2", teams.length === 2);
+    controlEl.classList.toggle("control--teams-3", teams.length === 3);
+    controlEl.classList.toggle("control--teams-4", teams.length >= 4);
 
     if (inputViewEl) inputViewEl.hidden = editing;
     if (editViewEl) editViewEl.hidden = !editing;

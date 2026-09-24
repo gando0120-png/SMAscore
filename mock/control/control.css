@@ -11,12 +11,16 @@
 :root {
   --control-width: min(100%, 390px);
   --footer-h: clamp(52px, 7vh, 58px);
+  /* 固定フッター実高さ（ボタンmin + 上下padding + 余白） */
+  --footer-stack-h: calc(var(--footer-h) + clamp(12px, 2.4vh, 16px) + env(safe-area-inset-bottom, 0px));
   --gap-xs: clamp(4px, 1vh, 6px);
   --gap-sm: clamp(6px, 1.2vh, 8px);
   --color-team-1: #448aff;
   --color-team-2: #ff5252;
   --color-team-3: #66bb6a;
   --color-team-4: #ffca28;
+  /* 1〜12（4段）+ 0/ミス/F（1段）が潰れない最低高さ */
+  --keypad-min-h: calc(5 * clamp(36px, 8vh, 44px) + 4 * clamp(4px, 1vh, 6px));
 }
 
 html {
@@ -62,7 +66,9 @@ button {
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-bottom: calc(var(--footer-h) + var(--gap-sm) + env(safe-area-inset-bottom));
+  -webkit-overflow-scrolling: touch;
+  /* 固定フッターに隠れないよう実高さ以上の余白を確保 */
+  padding-bottom: calc(var(--footer-stack-h) + var(--gap-sm));
 }
 
 /* 修正画面では本体スクロールを止め、履歴領域だけ縦スクロールする */
@@ -588,11 +594,19 @@ button {
 .view--edit {
   display: flex;
   flex-direction: column;
-  flex: 1;
-  min-height: 0;
 }
 
+/* 通常入力: 内容高さを確保し、足りなければ control__body がスクロールする */
+.view--input {
+  flex: 1 0 auto;
+  min-height: min-content;
+  overflow: visible;
+}
+
+/* 修正画面: 履歴領域だけスクロール（従来どおり） */
 .view--edit {
+  flex: 1;
+  min-height: 0;
   gap: var(--gap-xs);
   padding-bottom: 2px;
   overflow: hidden;
@@ -687,11 +701,11 @@ button {
 /* ── テンキー ── */
 
 .keypad {
-  flex: 1;
+  flex: 1 0 auto;
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: 0;
+  min-height: var(--keypad-min-h);
   padding: clamp(2px, 0.6vh, 4px) clamp(10px, 3vw, 14px) var(--gap-xs);
 }
 
@@ -1079,6 +1093,78 @@ button {
     min-height: clamp(36px, 8.5vh, 42px);
     font-size: clamp(16px, 4.2vw, 18px);
   }
+
+  .force-end-hint {
+    display: none;
+  }
+
+  .force-end-wrap {
+    padding: 4px 8px;
+    margin-bottom: 2px;
+  }
+
+  .force-end-btn {
+    min-height: 34px;
+    font-size: 0.8rem;
+  }
+
+  .throw-order__title {
+    margin-bottom: 3px;
+    font-size: 9px;
+  }
+
+  .input-team {
+    padding: 4px 8px;
+  }
+}
+
+@media (max-height: 700px) {
+  /* 競技中スクロールを減らすため、短い端末では上部をさらに圧縮 */
+  .header {
+    padding-bottom: 2px;
+  }
+
+  .header__set {
+    margin-top: 1px;
+  }
+
+  .team-board {
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .throw-order__row {
+    min-height: 32px;
+    padding: 2px 6px;
+  }
+
+  .throw-order__btn {
+    min-height: 28px;
+    min-width: 32px;
+    font-size: 10px;
+  }
+
+  .throw-order__list {
+    gap: 3px;
+  }
+
+  .input-display {
+    min-height: 42px;
+  }
+
+  .input-display__value--entered,
+  .input-display__value,
+  .input-display__value--waiting {
+    font-size: clamp(36px, 10vw, 44px);
+  }
+
+  .key {
+    min-height: clamp(34px, 7.5vh, 40px);
+  }
+
+  :root {
+    --keypad-min-h: calc(5 * clamp(34px, 7.5vh, 40px) + 4 * 4px);
+  }
 }
 
 @media (max-height: 640px) {
@@ -1088,7 +1174,151 @@ button {
 
   .input-display__value--entered,
   .input-display__value {
-    font-size: clamp(44px, 12vw, 52px);
+    font-size: clamp(40px, 11vw, 48px);
+  }
+
+  .input-display {
+    min-height: clamp(44px, 8vh, 52px);
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+
+  .throw-order__row {
+    min-height: 34px;
+    padding: 3px 6px;
+  }
+
+  .throw-order__btn {
+    min-height: 30px;
+    min-width: 34px;
+    padding: 2px 6px;
+    font-size: 10px;
+  }
+
+  .throw-order__list {
+    gap: 4px;
+  }
+}
+
+/* ── 3・4チーム: チーム表示・投擲順をコンパクト化して入力領域を確保 ── */
+
+.control--teams-3 .team-board,
+.control--teams-4 .team-board {
+  gap: 3px;
+  padding-top: clamp(4px, 0.8vh, 6px);
+  padding-bottom: clamp(4px, 0.8vh, 6px);
+}
+
+.control--teams-3 .team-card,
+.control--teams-4 .team-card {
+  padding: clamp(3px, 0.7vh, 5px) clamp(4px, 1.4vw, 6px);
+  gap: 0;
+}
+
+.control--teams-3 .team-card__name,
+.control--teams-4 .team-card__name {
+  font-size: clamp(8px, 2.2vw, 9px);
+  line-height: 1.1;
+}
+
+.control--teams-3 .team-card__score,
+.control--teams-4 .team-card__score {
+  font-size: clamp(15px, 4.2vw, 18px);
+}
+
+.control--teams-3 .team-card__total,
+.control--teams-4 .team-card__total,
+.control--teams-3 .team-card__set-wins,
+.control--teams-4 .team-card__set-wins {
+  font-size: clamp(7px, 1.9vw, 8px);
+}
+
+.control--teams-3 .team-card__misses,
+.control--teams-4 .team-card__misses {
+  font-size: clamp(8px, 2.1vw, 9px);
+  gap: 4px;
+  margin-top: 0;
+}
+
+.control--teams-3 .team-card__badge,
+.control--teams-4 .team-card__badge {
+  font-size: 7px;
+}
+
+.control--teams-3 .throw-order__list,
+.control--teams-4 .throw-order__list {
+  gap: 4px;
+}
+
+.control--teams-3 .throw-order__title,
+.control--teams-4 .throw-order__title {
+  margin-bottom: 4px;
+}
+
+.control--teams-3 .throw-order__row,
+.control--teams-4 .throw-order__row {
+  min-height: 34px;
+  padding: 3px 6px;
+  gap: 4px;
+}
+
+.control--teams-3 .throw-order__btn,
+.control--teams-4 .throw-order__btn {
+  min-width: 34px;
+  min-height: 30px;
+  padding: 2px 5px;
+  font-size: 10px;
+}
+
+.control--teams-3 .throw-order__name,
+.control--teams-4 .throw-order__name {
+  font-size: clamp(10px, 2.8vw, 11px);
+}
+
+.control--teams-3 .input-team,
+.control--teams-4 .input-team {
+  padding: clamp(4px, 0.9vh, 6px) clamp(8px, 2.5vw, 10px);
+}
+
+.control--teams-3 .input-team__name,
+.control--teams-4 .input-team__name {
+  font-size: clamp(12px, 3.2vw, 14px);
+}
+
+.control--teams-3 .force-end-wrap,
+.control--teams-4 .force-end-wrap {
+  margin-bottom: 2px;
+  padding: 4px 8px;
+}
+
+.control--teams-3 .force-end-btn,
+.control--teams-4 .force-end-btn {
+  min-height: 34px;
+}
+
+.control--teams-3 .force-end-hint,
+.control--teams-4 .force-end-hint {
+  display: none;
+}
+
+/* 4チームは2段グリッドなのでさらに詰める */
+.control--teams-4 .team-card__score {
+  font-size: clamp(14px, 3.8vw, 16px);
+}
+
+.control--teams-4 .throw-order__row {
+  min-height: 32px;
+  padding: 2px 5px;
+}
+
+@media (max-height: 720px) {
+  .control--teams-3 .throw-order__row,
+  .control--teams-4 .throw-order__row {
+    min-height: 30px;
+  }
+
+  .control--teams-4 .team-board {
+    gap: 2px;
   }
 }
 
