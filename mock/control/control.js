@@ -73,6 +73,26 @@
   const inputDisplayLabel = document.querySelector("#inputView .input-display__label");
   const editInputDisplayLabel = document.querySelector("#editView .input-display__label");
 
+  /**
+   * Android Chrome ではアドレスバー/ナビバー分だけ visualViewport が内側Heightより小さい。
+   * 100dvh / position:fixed だけでは下段キーが不可視になるため、可視高さを --app-height に同期する。
+   */
+  function syncAppHeight() {
+    const vv = window.visualViewport;
+    const height = Math.max(1, Math.round(vv?.height ?? window.innerHeight));
+    document.documentElement.style.setProperty("--app-height", `${height}px`);
+    const controlRoot = document.querySelector(".control");
+    if (controlRoot) {
+      // Chrome UI 込みの短い可視領域向けに追加圧縮クラスを付与
+      controlRoot.classList.toggle("control--compact-vv", height <= 580);
+      controlRoot.classList.toggle("control--tight-vv", height <= 540);
+    }
+  }
+  syncAppHeight();
+  window.addEventListener("resize", syncAppHeight);
+  window.visualViewport?.addEventListener("resize", syncAppHeight);
+  window.visualViewport?.addEventListener("scroll", syncAppHeight);
+
   const matchConfig = window.SMAScoreMatchConfig?.load();
   if (!matchConfig) {
     window.location.href = "../setup/";

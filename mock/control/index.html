@@ -62,14 +62,16 @@
           <p class="input-display__cursor" id="inputEditCursor" hidden></p>
         </section>
 
-        <section class="keypad" id="keypad" aria-label="得点入力">
-          <div class="keypad__grid">
+        <section class="keypad keypad--3row" id="keypad" aria-label="得点入力">
+          <div class="keypad__row keypad__row--six">
             <button class="key" type="button" data-value="1">1</button>
             <button class="key" type="button" data-value="2">2</button>
             <button class="key" type="button" data-value="3">3</button>
             <button class="key" type="button" data-value="4">4</button>
             <button class="key" type="button" data-value="5">5</button>
             <button class="key" type="button" data-value="6">6</button>
+          </div>
+          <div class="keypad__row keypad__row--six">
             <button class="key" type="button" data-value="7">7</button>
             <button class="key" type="button" data-value="8">8</button>
             <button class="key" type="button" data-value="9">9</button>
@@ -77,7 +79,7 @@
             <button class="key" type="button" data-value="11">11</button>
             <button class="key" type="button" data-value="12">12</button>
           </div>
-          <div class="keypad__row">
+          <div class="keypad__row keypad__row--special">
             <button class="key" type="button" data-value="0">0</button>
             <button class="key key--miss" type="button" data-value="miss">ミス</button>
             <button class="key key--foul" type="button" data-value="F">F</button>

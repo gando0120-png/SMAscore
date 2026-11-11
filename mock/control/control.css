@@ -10,17 +10,19 @@
 
 :root {
   --control-width: min(100%, 390px);
+  /* visualViewport 追従（JS が上書き）。未対応時は 100dvh */
+  --app-height: 100dvh;
   --footer-h: clamp(52px, 7vh, 58px);
-  /* 固定フッター実高さ（ボタンmin + 上下padding + 余白） */
-  --footer-stack-h: calc(var(--footer-h) + clamp(12px, 2.4vh, 16px) + env(safe-area-inset-bottom, 0px));
   --gap-xs: clamp(4px, 1vh, 6px);
   --gap-sm: clamp(6px, 1.2vh, 8px);
   --color-team-1: #448aff;
   --color-team-2: #ff5252;
   --color-team-3: #66bb6a;
   --color-team-4: #ffca28;
-  /* 1〜12（4段）+ 0/ミス/F（1段）が潰れない最低高さ */
-  --keypad-min-h: calc(5 * clamp(36px, 8vh, 44px) + 4 * clamp(4px, 1vh, 6px));
+  /* 通常入力: 6列×2段 + 0/ミス/F（計3段） */
+  --key-h: clamp(44px, 8vh, 48px);
+  --keypad-gap: clamp(5px, 1.2vh, 7px);
+  --keypad-min-h: calc(3 * var(--key-h) + 2 * var(--keypad-gap));
 }
 
 html {
@@ -51,8 +53,8 @@ button {
   display: flex;
   flex-direction: column;
   width: var(--control-width);
-  height: 100dvh;
-  max-height: 100dvh;
+  height: var(--app-height);
+  max-height: var(--app-height);
   margin: 0 auto;
   background: #121820;
   overflow: hidden;
@@ -67,8 +69,8 @@ button {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
-  /* 固定フッターに隠れないよう実高さ以上の余白を確保 */
-  padding-bottom: calc(var(--footer-stack-h) + var(--gap-sm));
+  /* フッターは in-flow。余白は最小限（スクロールフォールバック用） */
+  padding-bottom: var(--gap-sm);
 }
 
 /* 修正画面では本体スクロールを止め、履歴領域だけ縦スクロールする */
@@ -726,6 +728,7 @@ button {
   display: flex;
   flex-direction: column;
   justify-content: center;
+  gap: var(--keypad-gap);
   min-height: var(--keypad-min-h);
   padding: clamp(2px, 0.6vh, 4px) clamp(10px, 3vw, 14px) var(--gap-xs);
 }
@@ -735,6 +738,7 @@ button {
   pointer-events: none;
 }
 
+/* 修正モード用（従来の3列×4段 + 下段） */
 .keypad__grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -744,8 +748,31 @@ button {
 .keypad__row {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
-  gap: clamp(5px, 1.2vh, 7px);
+  gap: var(--keypad-gap);
+  margin-top: 0;
+}
+
+.keypad:not(.keypad--3row) .keypad__row {
   margin-top: clamp(5px, 1.2vh, 7px);
+}
+
+/* 通常入力: 1〜6 / 7〜12 / 0・ミス・F の3段 */
+.keypad--3row .keypad__row--six {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.keypad--3row .keypad__row--special {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.keypad--3row .key {
+  min-height: var(--key-h);
+  font-size: clamp(15px, 3.8vw, 18px);
+}
+
+.keypad--3row .keypad__row--special .key {
+  /* 数字キーの約2倍幅（6列→3列）で押しやすさを確保 */
+  font-size: clamp(16px, 4.2vw, 20px);
 }
 
 .key {
@@ -789,14 +816,12 @@ button {
   background: rgba(255, 193, 7, 0.28);
 }
 
-/* ── 固定フッター ── */
+/* ── フッター（visualViewport 内の in-flow。fixed だと Chrome UI 下に潜る） ── */
 
 .actions {
-  position: fixed;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: var(--control-width);
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
   display: grid;
   grid-template-columns: 1fr 1fr 2fr;
   gap: clamp(6px, 1.5vw, 8px);
@@ -1091,8 +1116,8 @@ button {
   }
 
   .control {
-    height: min(844px, 100dvh);
-    max-height: min(844px, 100dvh);
+    height: min(844px, var(--app-height));
+    max-height: min(844px, var(--app-height));
     border-radius: 16px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
@@ -1179,12 +1204,13 @@ button {
     font-size: clamp(36px, 10vw, 44px);
   }
 
-  .key {
-    min-height: clamp(34px, 7.5vh, 40px);
+  .keypad--3row .key {
+    min-height: clamp(42px, 7.8vh, 48px);
   }
 
   :root {
-    --keypad-min-h: calc(5 * clamp(34px, 7.5vh, 40px) + 4 * 4px);
+    --key-h: clamp(42px, 7.8vh, 48px);
+    --keypad-min-h: calc(3 * var(--key-h) + 2 * var(--keypad-gap));
   }
 }
 
@@ -1360,12 +1386,13 @@ button {
     font-size: 8px;
   }
 
-  .control--input-mode .key {
-    min-height: clamp(36px, 7.2vh, 40px);
+  .control--input-mode .keypad--3row .key {
+    min-height: clamp(42px, 7.5vh, 48px);
   }
 
   .control--input-mode {
-    --keypad-min-h: calc(5 * clamp(36px, 7.2vh, 40px) + 4 * 3px);
+    --key-h: clamp(42px, 7.5vh, 48px);
+    --keypad-min-h: calc(3 * var(--key-h) + 2 * var(--keypad-gap));
     --footer-h: clamp(48px, 6.5vh, 54px);
   }
 }
@@ -1384,13 +1411,62 @@ button {
     padding: 2px 4px;
   }
 
-  .control--input-mode .key {
-    min-height: 36px;
+  .control--input-mode .keypad--3row .key {
+    min-height: 44px;
   }
 
   .control--input-mode {
-    --keypad-min-h: calc(5 * 36px + 4 * 3px);
+    --key-h: 44px;
+    --keypad-min-h: calc(3 * var(--key-h) + 2 * var(--keypad-gap));
   }
+}
+
+/* visualViewport が短いとき（Chrome UI 表示中など）の追加圧縮 */
+.control--compact-vv.control--input-mode .throw-order__title {
+  display: none;
+}
+
+.control--compact-vv.control--input-mode .input-display {
+  min-height: 36px;
+}
+
+.control--compact-vv.control--input-mode .input-display__value--entered,
+.control--compact-vv.control--input-mode .input-display__value,
+.control--compact-vv.control--input-mode .input-display__value--waiting {
+  font-size: clamp(28px, 8vw, 36px);
+}
+
+.control--compact-vv.control--input-mode .force-end-wrap {
+  padding: 0 6px;
+}
+
+.control--compact-vv.control--input-mode .force-end-btn {
+  min-height: 26px;
+}
+
+.control--compact-vv.control--input-mode .throw-order__row {
+  min-height: 28px;
+  padding: 1px 4px;
+}
+
+.control--tight-vv.control--input-mode .team-board {
+  gap: 2px;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+
+.control--tight-vv.control--input-mode.control--teams-4 .team-card {
+  padding: 2px 4px;
+}
+
+.control--tight-vv.control--input-mode .header {
+  padding-top: max(4px, env(safe-area-inset-top));
+  padding-bottom: 0;
+}
+
+.control--tight-vv.control--input-mode .keypad {
+  padding-top: 0;
+  padding-bottom: 0;
 }
 
 /* ── 試合中設定モーダル ── */

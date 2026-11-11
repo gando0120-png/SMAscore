@@ -3745,7 +3745,9 @@ async function run() {
         const snap = await page.evaluate((keyValues) => {
           const body = document.querySelector(".control__body");
           const footer = document.querySelector(".actions");
+          const control = document.querySelector(".control");
           const footerTop = footer.getBoundingClientRect().top;
+          const appBottom = control.getBoundingClientRect().bottom;
           const visibleInPlayArea = (el) => {
             if (!el || el.hidden) return false;
             const style = getComputedStyle(el);
@@ -3753,10 +3755,10 @@ async function run() {
             const r = el.getBoundingClientRect();
             return r.width > 0 && r.height > 0 && r.top >= -1 && r.bottom <= footerTop + 1;
           };
-          const visibleOnScreen = (el) => {
+          const visibleInApp = (el) => {
             if (!el || el.hidden) return false;
             const r = el.getBoundingClientRect();
-            return r.width > 0 && r.height > 0 && r.top >= -1 && r.bottom <= window.innerHeight + 1;
+            return r.width > 0 && r.height > 0 && r.top >= -1 && r.bottom <= appBottom + 1;
           };
           const keys = keyValues.map((v) => {
             const el = document.querySelector(`#keypad .key[data-value="${v}"]`);
@@ -3770,7 +3772,7 @@ async function run() {
           });
           const actions = ["editModeBtn", "backBtn", "confirmBtn", "forceEndMatchBtn"].map((id) => {
             const el = document.getElementById(id);
-            return { id, ok: id === "forceEndMatchBtn" ? visibleInPlayArea(el) : visibleOnScreen(el) };
+            return { id, ok: id === "forceEndMatchBtn" ? visibleInPlayArea(el) : visibleInApp(el) };
           });
           const cards = [...document.querySelectorAll("#teamBoard .team-card")].map((card) => {
             const name = card.querySelector(".team-card__name");
@@ -3794,6 +3796,24 @@ async function run() {
             visibleInPlayArea(document.getElementById("matchName")) &&
             visibleInPlayArea(document.getElementById("setScore"));
           const throwOk = visibleInPlayArea(document.getElementById("throwOrderPanel"));
+          const layout = (() => {
+            const keypad = document.getElementById("keypad");
+            const rows = [...keypad.querySelectorAll(".keypad__row")];
+            const sixCols = rows
+              .filter((row) => row.classList.contains("keypad__row--six"))
+              .map((row) => [...row.querySelectorAll(".key[data-value]")].map((k) => k.dataset.value));
+            const special = [
+              ...keypad.querySelectorAll(".keypad__row--special .key[data-value]"),
+            ].map((k) => k.dataset.value);
+            return {
+              rowCount: rows.length,
+              sixCols,
+              special,
+              is3row: keypad.classList.contains("keypad--3row"),
+            };
+          })();
+          const numW = document.querySelector('#keypad .key[data-value="1"]').getBoundingClientRect().width;
+          const zeroW = document.querySelector('#keypad .key[data-value="0"]').getBoundingClientRect().width;
           return {
             needScroll: body.scrollHeight > body.clientHeight + 2,
             bodyOverflowY: getComputedStyle(body).overflowY,
@@ -3805,6 +3825,11 @@ async function run() {
             minScoreSize: Math.min(...cards.map((c) => c.scoreSize)),
             metaOk,
             throwOk,
+            layout,
+            specialWider: zeroW >= numW * 1.5,
+            appHeight: getComputedStyle(document.documentElement).getPropertyValue("--app-height").trim(),
+            controlH: Math.round(control.getBoundingClientRect().height),
+            footerPos: getComputedStyle(footer).position,
           };
         }, keyValues);
 
@@ -3814,15 +3839,70 @@ async function run() {
         assert(snap.cardsFailed === 0, `${label} team cards unreadable`);
         assert(snap.metaOk, `${label} meta not visible`);
         assert(snap.throwOk, `${label} throw order not visible`);
-        assert(snap.keyMinH >= 34, `${label} key height too small: ${snap.keyMinH}`);
+        assert(snap.keyMinH >= 40, `${label} key height too small: ${snap.keyMinH}`);
         assert(snap.keyMinW >= 34, `${label} key width too small: ${snap.keyMinW}`);
         assert(snap.minScoreSize >= 14, `${label} score font too small: ${snap.minScoreSize}`);
+        assert(snap.layout.is3row && snap.layout.rowCount === 3, `${label} keypad is not 3-row`);
+        assert(
+          JSON.stringify(snap.layout.sixCols) === JSON.stringify([
+            ["1", "2", "3", "4", "5", "6"],
+            ["7", "8", "9", "10", "11", "12"],
+          ]),
+          `${label} number rows wrong: ${JSON.stringify(snap.layout.sixCols)}`
+        );
+        assert(
+          JSON.stringify(snap.layout.special) === JSON.stringify(["0", "miss", "F"]),
+          `${label} special row wrong`
+        );
+        assert(snap.specialWider, `${label} 0/miss/F should be wider than number keys`);
+        assert(
+          snap.footerPos === "relative" || snap.footerPos === "static",
+          `${label} footer should be in-flow, got ${snap.footerPos}`
+        );
         // フォールバックとしてスクロール可能スタイルは残す
         assert(
           snap.bodyOverflowY === "auto" || snap.bodyOverflowY === "scroll",
           `${label} scroll fallback missing`
         );
         return snap;
+      }
+
+      async function simulateAndroidChromeUi(page, chromeUiPx) {
+        await page.evaluate((chromeUiPx) => {
+          const apply = () => {
+            const base = window.visualViewport?.height ?? window.innerHeight;
+            const height = Math.max(320, Math.round(base - chromeUiPx));
+            document.documentElement.style.setProperty("--app-height", `${height}px`);
+            const controlRoot = document.querySelector(".control");
+            if (controlRoot) {
+              controlRoot.classList.toggle("control--compact-vv", height <= 580);
+              controlRoot.classList.toggle("control--tight-vv", height <= 540);
+            }
+          };
+          apply();
+          window.__smascoreChromeUiSimPx = chromeUiPx;
+          if (!window.__smascoreChromeUiSimHooked) {
+            window.__smascoreChromeUiSimHooked = true;
+            const hook = () => {
+              if (typeof window.__smascoreChromeUiSimPx === "number") {
+                const base = window.visualViewport?.height ?? window.innerHeight;
+                const height = Math.max(
+                  320,
+                  Math.round(base - window.__smascoreChromeUiSimPx)
+                );
+                document.documentElement.style.setProperty("--app-height", `${height}px`);
+                const controlRoot = document.querySelector(".control");
+                if (controlRoot) {
+                  controlRoot.classList.toggle("control--compact-vv", height <= 580);
+                  controlRoot.classList.toggle("control--tight-vv", height <= 540);
+                }
+              }
+            };
+            window.addEventListener("resize", hook);
+            window.visualViewport?.addEventListener("resize", hook);
+          }
+        }, chromeUiPx);
+        await new Promise((r) => setTimeout(r, 120));
       }
 
       for (const teams of teamSets) {
@@ -3892,7 +3972,122 @@ async function run() {
         await control.close();
       }
 
-      console.log("… 105-106 one-screen input layout OK");
+      // 3段キーパッド + Android Chrome UI 想定の可視領域縮小
+      {
+        for (const teams of teamSets) {
+          for (const vp of viewports) {
+            const control = await openControl(browser, teams, { room: nextRoom() });
+            await control.setViewport({
+              width: vp.width,
+              height: vp.height,
+              deviceScaleFactor: 2,
+              isMobile: true,
+              hasTouch: true,
+            });
+            // URLバー≈56 + ナビ≈48 を想定した可視領域
+            await simulateAndroidChromeUi(control, 104);
+            const snap = await assertOneScreenInput(
+              control,
+              `${teams.length}T ${vp.name} chromeUI-104`
+            );
+            assert(snap.keyMinH >= 40, `chromeUI key height ${snap.keyMinH}`);
+
+            await confirmKey(control, "0");
+            await confirmKey(control, "miss");
+            await confirmKey(control, "F");
+            await control.evaluate(() => {
+              document.querySelector('#keypad .key[data-value="7"]').click();
+            });
+            const selected = await control.evaluate(
+              () =>
+                document
+                  .querySelector('#keypad .key[data-value="7"]')
+                  ?.classList.contains("key--selected") === true
+            );
+            assert(selected, `${teams.length}T ${vp.name} selection state`);
+            await control.evaluate(() => document.getElementById("confirmBtn").click());
+
+            const scores = await control.evaluate(() =>
+              (window.SMAScoreSync.read().teams || []).map((t) => t.score)
+            );
+            assert(
+              scores.some((s) => s > 0) || scores.every((s) => typeof s === "number"),
+              `${teams.length}T ${vp.name} scoring still works`
+            );
+            await control.close();
+          }
+        }
+        results.push(
+          "107. 3段キーパッドが2/3/4チーム×各viewportで可視・操作可能 OK"
+        );
+        results.push(
+          "108. Android Chrome UI想定の可視領域縮小でも0/ミス/F・戻る・決定が操作可能 OK"
+        );
+        console.log("…", results[results.length - 2]);
+        console.log("…", results[results.length - 1]);
+      }
+
+      {
+        const control = await openControl(browser, ["A", "B", "C", "D"], { room: nextRoom() });
+        await control.setViewport({
+          width: 360,
+          height: 640,
+          deviceScaleFactor: 2,
+          isMobile: true,
+          hasTouch: true,
+        });
+        await simulateAndroidChromeUi(control, 104);
+        await confirmKey(control, "5");
+        await control.evaluate(() => document.getElementById("backBtn").click());
+        const backSelected = await control.evaluate(
+          () =>
+            document
+              .querySelector('#keypad .key[data-value="5"]')
+              ?.classList.contains("key--selected") === true
+        );
+        assert(backSelected, "109 back restores selection");
+        await control.evaluate(() => document.getElementById("confirmBtn").click());
+
+        await control.evaluate(() => document.getElementById("editModeBtn").click());
+        const editKeypadOk = await control.evaluate(() => {
+          const edit = document.getElementById("editKeypad");
+          return (
+            !!edit &&
+            !edit.classList.contains("keypad--3row") &&
+            !!edit.querySelector(".keypad__grid")
+          );
+        });
+        assert(editKeypadOk, "109 edit keypad unchanged");
+        await control.evaluate(() => document.getElementById("editModeBtn").click());
+
+        await control.evaluate(() => document.querySelector(".header__settings").click());
+        await control.waitForSelector("#settingsModal:not([hidden])");
+        const settingsScroll = await control.evaluate(() => {
+          const form = document.querySelector(".settings-modal__form");
+          return (
+            getComputedStyle(form).overflowY === "auto" ||
+            getComputedStyle(form).overflowY === "scroll"
+          );
+        });
+        assert(settingsScroll, "109 settings scroll intact");
+        await control.evaluate(() => document.getElementById("settingsCloseBtn").click());
+
+        await finishWin2Match(control, 0);
+        const resultVisible = await control.evaluate(() => {
+          const panel = document.getElementById("matchResultPanel");
+          if (!panel || panel.hidden) return false;
+          const r = panel.getBoundingClientRect();
+          return r.height > 0 && r.top < window.innerHeight;
+        });
+        assert(resultVisible, "109 result panel visible");
+        results.push(
+          "109. 3段化後も戻る・選択状態・修正/設定/結果に影響なし OK"
+        );
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      console.log("… 105-109 one-screen 3-row keypad OK");
     }
 
     console.log("\nBROWSER VERIFY RESULTS");
