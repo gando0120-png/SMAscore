@@ -3727,6 +3727,174 @@ async function run() {
       console.log("… 100-104 setup/settings team fields scroll OK");
     }
 
+    // ── 通常入力画面の完全1画面化 ──
+    {
+      const viewports = [
+        { width: 390, height: 844, name: "390x844" },
+        { width: 375, height: 667, name: "375x667" },
+        { width: 360, height: 640, name: "360x640" },
+      ];
+      const teamSets = [
+        ["A", "B"],
+        ["A", "B", "C"],
+        ["A", "B", "C", "D"],
+      ];
+      const keyValues = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "0", "F", "miss"];
+
+      async function assertOneScreenInput(page, label) {
+        const snap = await page.evaluate((keyValues) => {
+          const body = document.querySelector(".control__body");
+          const footer = document.querySelector(".actions");
+          const footerTop = footer.getBoundingClientRect().top;
+          const visibleInPlayArea = (el) => {
+            if (!el || el.hidden) return false;
+            const style = getComputedStyle(el);
+            if (style.display === "none" || style.visibility === "hidden") return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.top >= -1 && r.bottom <= footerTop + 1;
+          };
+          const visibleOnScreen = (el) => {
+            if (!el || el.hidden) return false;
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0 && r.top >= -1 && r.bottom <= window.innerHeight + 1;
+          };
+          const keys = keyValues.map((v) => {
+            const el = document.querySelector(`#keypad .key[data-value="${v}"]`);
+            const r = el?.getBoundingClientRect();
+            return {
+              v,
+              ok: visibleInPlayArea(el),
+              h: r ? Math.round(r.height) : 0,
+              w: r ? Math.round(r.width) : 0,
+            };
+          });
+          const actions = ["editModeBtn", "backBtn", "confirmBtn", "forceEndMatchBtn"].map((id) => {
+            const el = document.getElementById(id);
+            return { id, ok: id === "forceEndMatchBtn" ? visibleInPlayArea(el) : visibleOnScreen(el) };
+          });
+          const cards = [...document.querySelectorAll("#teamBoard .team-card")].map((card) => {
+            const name = card.querySelector(".team-card__name");
+            const score = card.querySelector(".team-card__score");
+            const misses = card.querySelector(".team-card__misses");
+            const sets = card.querySelector(".team-card__set-wins");
+            const scoreSize = score ? parseFloat(getComputedStyle(score).fontSize) : 0;
+            return {
+              ok:
+                visibleInPlayArea(card) &&
+                visibleInPlayArea(name) &&
+                visibleInPlayArea(score) &&
+                !!misses &&
+                !!sets &&
+                scoreSize >= 14,
+              scoreSize,
+            };
+          });
+          const metaOk =
+            visibleInPlayArea(document.getElementById("tournamentName")) &&
+            visibleInPlayArea(document.getElementById("matchName")) &&
+            visibleInPlayArea(document.getElementById("setScore"));
+          const throwOk = visibleInPlayArea(document.getElementById("throwOrderPanel"));
+          return {
+            needScroll: body.scrollHeight > body.clientHeight + 2,
+            bodyOverflowY: getComputedStyle(body).overflowY,
+            keysFailed: keys.filter((k) => !k.ok).map((k) => k.v),
+            keyMinH: Math.min(...keys.map((k) => k.h)),
+            keyMinW: Math.min(...keys.map((k) => k.w)),
+            actionsFailed: actions.filter((a) => !a.ok).map((a) => a.id),
+            cardsFailed: cards.filter((c) => !c.ok).length,
+            minScoreSize: Math.min(...cards.map((c) => c.scoreSize)),
+            metaOk,
+            throwOk,
+          };
+        }, keyValues);
+
+        assert(!snap.needScroll, `${label} should fit without scroll (${JSON.stringify(snap)})`);
+        assert(snap.keysFailed.length === 0, `${label} keys out of view: ${snap.keysFailed}`);
+        assert(snap.actionsFailed.length === 0, `${label} actions out: ${snap.actionsFailed}`);
+        assert(snap.cardsFailed === 0, `${label} team cards unreadable`);
+        assert(snap.metaOk, `${label} meta not visible`);
+        assert(snap.throwOk, `${label} throw order not visible`);
+        assert(snap.keyMinH >= 34, `${label} key height too small: ${snap.keyMinH}`);
+        assert(snap.keyMinW >= 34, `${label} key width too small: ${snap.keyMinW}`);
+        assert(snap.minScoreSize >= 14, `${label} score font too small: ${snap.minScoreSize}`);
+        // フォールバックとしてスクロール可能スタイルは残す
+        assert(
+          snap.bodyOverflowY === "auto" || snap.bodyOverflowY === "scroll",
+          `${label} scroll fallback missing`
+        );
+        return snap;
+      }
+
+      for (const teams of teamSets) {
+        for (const vp of viewports) {
+          const control = await openControl(browser, teams, { room: nextRoom() });
+          await control.setViewport({
+            width: vp.width,
+            height: vp.height,
+            deviceScaleFactor: 2,
+            isMobile: true,
+            hasTouch: true,
+          });
+          await new Promise((r) => setTimeout(r, 200));
+          await assertOneScreenInput(control, `${teams.length}T ${vp.name}`);
+          await control.close();
+        }
+      }
+      results.push("105. 2/3/4チーム×各viewportで通常入力が1画面に収まる OK");
+      console.log("…", results[results.length - 1]);
+
+      // 修正・設定・結果画面が崩れていないこと
+      {
+        const control = await openControl(browser, ["A", "B", "C"], { room: nextRoom() });
+        await control.setViewport({
+          width: 360,
+          height: 640,
+          deviceScaleFactor: 2,
+          isMobile: true,
+          hasTouch: true,
+        });
+        await confirmKey(control, "5");
+        await control.evaluate(() => document.getElementById("editModeBtn").click());
+        await control.waitForSelector(".control--edit-mode");
+        const editOk = await control.evaluate(() => {
+          const body = document.querySelector(".control__body");
+          const scroll = document.getElementById("historyScroll");
+          return (
+            getComputedStyle(body).overflowY === "hidden" ||
+            getComputedStyle(body).overflowY === "clip"
+          ) && !!scroll;
+        });
+        assert(editOk, "106 edit mode scroll structure");
+        await control.evaluate(() => document.getElementById("editModeBtn").click());
+
+        await control.evaluate(() => document.querySelector(".header__settings").click());
+        await control.waitForSelector("#settingsModal:not([hidden])");
+        const settingsOk = await control.evaluate(() => {
+          const form = document.querySelector(".settings-modal__form");
+          return (
+            !!form &&
+            getComputedStyle(form).minHeight === "0px" &&
+            (getComputedStyle(form).overflowY === "auto" ||
+              getComputedStyle(form).overflowY === "scroll")
+          );
+        });
+        assert(settingsOk, "106 settings scroll structure");
+        await control.evaluate(() => document.getElementById("settingsCloseBtn").click());
+
+        await finishWin2Match(control, 0);
+        const resultOk = await control.evaluate(() => {
+          const panel = document.getElementById("matchResultPanel");
+          return panel && !panel.hidden;
+        });
+        assert(resultOk, "106 result panel");
+        results.push("106. 1画面化後も修正・設定・結果レイアウトが崩れない OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      console.log("… 105-106 one-screen input layout OK");
+    }
+
     console.log("\nBROWSER VERIFY RESULTS");
     results.forEach((line) => console.log("✔", line));
     console.log("ALL BROWSER CHECKS PASSED");

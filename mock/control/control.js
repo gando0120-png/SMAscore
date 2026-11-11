@@ -1163,14 +1163,15 @@
         const atLast = position === view.throwOrder.length - 1;
         const disabled = pastPreview || atFirst;
         const disabledRight = pastPreview || atLast;
+        const isActive = !view.setEnded && !view.matchEnded && teamIndex === view.activeTeamIndex;
         return `
-          <div class="throw-order__row throw-order__row--color-${teamIndex}" data-team-index="${teamIndex}">
+          <div class="throw-order__row throw-order__row--color-${teamIndex}${isActive ? " throw-order__row--active" : ""}" data-team-index="${teamIndex}">
             <span class="throw-order__pos">${position + 1}</span>
             <span class="throw-order__name">${team.name}</span>
             <div class="throw-order__actions">
-              <button type="button" class="throw-order__btn" data-action="front" ${disabled ? "disabled" : ""}>先頭</button>
-              <button type="button" class="throw-order__btn" data-action="left" ${disabled ? "disabled" : ""}>←</button>
-              <button type="button" class="throw-order__btn" data-action="right" ${disabledRight ? "disabled" : ""}>→</button>
+              <button type="button" class="throw-order__btn" data-action="front" ${disabled ? "disabled" : ""} aria-label="先頭へ">⇈</button>
+              <button type="button" class="throw-order__btn" data-action="left" ${disabled ? "disabled" : ""} aria-label="前へ">←</button>
+              <button type="button" class="throw-order__btn" data-action="right" ${disabledRight ? "disabled" : ""} aria-label="後へ">→</button>
             </div>
           </div>
         `;
