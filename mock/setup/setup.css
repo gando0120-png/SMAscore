@@ -39,10 +39,12 @@ button {
 .setup {
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
   max-width: 430px;
   margin: 0 auto;
   background: #121820;
+  overflow: hidden;
 }
 
 .setup__header {
@@ -69,10 +71,15 @@ button {
 }
 
 .setup__form {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   padding: 16px 16px 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* ── フィールドグループ ── */
@@ -230,12 +237,13 @@ button {
 /* ── 開始ボタン ── */
 
 .setup__footer {
-  margin-top: auto;
+  margin-top: 8px;
   padding: 16px 0;
   padding-bottom: max(20px, env(safe-area-inset-bottom));
   position: sticky;
   bottom: 0;
-  background: linear-gradient(180deg, transparent 0%, #121820 24%);
+  z-index: 2;
+  background: linear-gradient(180deg, rgba(18, 24, 32, 0) 0%, #121820 28%);
 }
 
 .start-btn {
@@ -271,11 +279,11 @@ button {
   }
 
   .setup {
-    min-height: calc(100dvh - 32px);
+    height: calc(100dvh - 32px);
+    max-height: calc(100dvh - 32px);
     border-radius: 16px;
     border: 1px solid rgba(255, 255, 255, 0.1);
     box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
-    overflow: hidden;
   }
 }
 

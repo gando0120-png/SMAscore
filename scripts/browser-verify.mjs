@@ -333,6 +333,77 @@ async function assertFooterActionsOperable(page, label) {
   assert(result.ok, `${label} footer actions not operable: ${result.failed.join(",")}`);
 }
 
+async function openSetupPage(browser, options = {}) {
+  const room = options.room || nextRoom();
+  ROOM = room;
+  const page = await browser.newPage();
+  page.on("dialog", async (dialog) => {
+    await dialog.accept();
+  });
+  if (options.viewport) {
+    await page.setViewport({
+      ...options.viewport,
+      deviceScaleFactor: options.viewport.deviceScaleFactor || 2,
+      isMobile: true,
+      hasTouch: true,
+    });
+  }
+  await gotoApp(page, `http://127.0.0.1:${PORT}/setup/?room=${room}`);
+  await page.waitForSelector(".setup__form");
+  await page.evaluate((room) => {
+    localStorage.setItem("smascore-room-id", room);
+  }, room);
+  return page;
+}
+
+async function setSetupTeamCount(page, teamCount) {
+  await page.evaluate((n) => {
+    const input = document.querySelector(`input[name="teams"][value="${n}"]`);
+    if (!input) throw new Error(`teams=${n} missing`);
+    input.checked = true;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }, teamCount);
+}
+
+async function countVisibleSetupTeamFields(page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll(".team-field")].filter(
+      (field) => getComputedStyle(field).display !== "none"
+    ).length
+  );
+}
+
+async function assertScrollerCanReach(page, scrollerSelector, targetSelector, label) {
+  const result = await page.evaluate(
+    ({ scrollerSelector, targetSelector }) => {
+      const scroller = document.querySelector(scrollerSelector);
+      const target = document.querySelector(targetSelector);
+      if (!scroller || !target) {
+        return { ok: false, reason: "missing", scrollerSelector, targetSelector };
+      }
+      const overflowY = getComputedStyle(scroller).overflowY;
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+      let rect = target.getBoundingClientRect();
+      const area = scroller.getBoundingClientRect();
+      if (rect.bottom > area.bottom) scroller.scrollTop += rect.bottom - area.bottom + 16;
+      if (rect.top < area.top) scroller.scrollTop -= area.top - rect.top + 16;
+      rect = target.getBoundingClientRect();
+      const visible =
+        rect.height > 0 &&
+        rect.top >= area.top - 2 &&
+        rect.bottom <= area.bottom + 2;
+      return {
+        ok: visible,
+        overflowY,
+        canScroll: scroller.scrollHeight > scroller.clientHeight + 1,
+        scrollTop: scroller.scrollTop,
+      };
+    },
+    { scrollerSelector, targetSelector }
+  );
+  assert(result.ok, `${label} cannot reach ${targetSelector}: ${JSON.stringify(result)}`);
+  return result;
+}
 
 /** 指定チームがセットを取れるまで進行（相手は低得点） */
 async function winCurrentSetFor(page, teamIndex) {
@@ -3412,6 +3483,248 @@ async function run() {
       }
 
       console.log("… 92-99 mobile keypad layout OK");
+    }
+
+    // ── 設定画面: 3・4チーム名入力とスクロール ──
+    {
+      const viewports = [
+        { width: 360, height: 640, name: "360x640" },
+        { width: 375, height: 667, name: "375x667" },
+        { width: 390, height: 844, name: "390x844" },
+      ];
+
+      // 1-4: チーム数切り替えで入力欄数が正しい / 名前保持
+      {
+        const setup = await openSetupPage(browser, {
+          viewport: { width: 375, height: 667 },
+        });
+        await setSetupTeamCount(setup, 2);
+        assert((await countVisibleSetupTeamFields(setup)) === 2, "100 2 teams fields");
+        await setup.evaluate(() => {
+          document.getElementById("team1").value = "Alpha";
+          document.getElementById("team2").value = "Bravo";
+        });
+
+        await setSetupTeamCount(setup, 4);
+        assert((await countVisibleSetupTeamFields(setup)) === 4, "100 4 teams fields");
+        assert(
+          await setup.evaluate(() => document.getElementById("team1").value === "Alpha"),
+          "100 keep name1"
+        );
+        await setup.evaluate(() => {
+          document.getElementById("team3").value = "Charlie";
+          document.getElementById("team4").value = "Delta";
+        });
+
+        await setSetupTeamCount(setup, 3);
+        assert((await countVisibleSetupTeamFields(setup)) === 3, "100 3 teams fields");
+        assert(
+          await setup.evaluate(
+            () =>
+              document.getElementById("team1").value === "Alpha" &&
+              document.getElementById("team3").value === "Charlie" &&
+              getComputedStyle(document.querySelector(".team-field--4")).display === "none"
+          ),
+          "100 3 teams keep / hide 4"
+        );
+
+        await setSetupTeamCount(setup, 2);
+        assert((await countVisibleSetupTeamFields(setup)) === 2, "100 back to 2");
+        assert(
+          await setup.evaluate(() => document.getElementById("team1").value === "Alpha"),
+          "100 keep after 2"
+        );
+
+        // 再び4にして開始 → control に全チーム反映
+        await setSetupTeamCount(setup, 4);
+        await setup.evaluate(() => {
+          document.getElementById("tournament").value = "設定検証大会";
+          document.getElementById("match").value = "4チーム戦";
+          document.getElementById("team1").value = "SMA";
+          document.getElementById("team2").value = "OPP";
+          document.getElementById("team3").value = "GUEST";
+          document.getElementById("team4").value = "ALLY";
+          document.querySelector(".setup__form").requestSubmit();
+        });
+        await setup.waitForFunction(() => location.pathname.includes("/control/"), {
+          timeout: 20000,
+        });
+        await waitForControlReady(setup);
+        const names = await setup.$$eval("#teamBoard .team-card__name", (els) =>
+          els.map((el) => el.textContent.trim())
+        );
+        assert(names.join("|") === "SMA|OPP|GUEST|ALLY", `100 control names ${names.join("|")}`);
+        results.push("100. チーム数切替で入力欄数が正しく更新され名前が反映される OK");
+        console.log("…", results[results.length - 1]);
+        await setup.close();
+      }
+
+      // 6-10: 各viewportで設定項目・3/4チーム入力・開始ボタンへ到達
+      for (const vp of viewports) {
+        const setup = await openSetupPage(browser, { viewport: vp });
+        await setSetupTeamCount(setup, 4);
+        assert((await countVisibleSetupTeamFields(setup)) === 4, `101 visible4 ${vp.name}`);
+        await assertScrollerCanReach(setup, ".setup__form", "#tournament", `101 tournament ${vp.name}`);
+        await assertScrollerCanReach(setup, ".setup__form", "#team3", `101 team3 ${vp.name}`);
+        await assertScrollerCanReach(setup, ".setup__form", "#team4", `101 team4 ${vp.name}`);
+        await assertScrollerCanReach(setup, ".setup__form", ".start-btn", `101 start ${vp.name}`);
+        // 入力可能か
+        await setup.evaluate(() => {
+          const input = document.getElementById("team4");
+          input.focus();
+          input.value = "Reachable4";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        assert(
+          await setup.evaluate(() => document.getElementById("team4").value === "Reachable4"),
+          `101 type team4 ${vp.name}`
+        );
+        await setup.close();
+      }
+      results.push("101. 各viewportで設定項目・3/4チーム入力・開始ボタンへ到達できる OK");
+      console.log("…", results[results.length - 1]);
+
+      // 11: 試合開始後のチーム名編集で全チーム操作
+      {
+        const control = await openControl(browser, ["A", "B", "C", "D"], {
+          room: nextRoom(),
+        });
+        await control.setViewport({
+          width: 360,
+          height: 640,
+          deviceScaleFactor: 2,
+          isMobile: true,
+          hasTouch: true,
+        });
+        await control.evaluate(() => document.querySelector(".header__settings").click());
+        await control.waitForSelector("#settingsModal:not([hidden])");
+        const count = await control.evaluate(
+          () => document.querySelectorAll("#settingsTeamNames .settings-field__input").length
+        );
+        assert(count === 4, "102 settings team inputs");
+        await assertScrollerCanReach(
+          control,
+          ".settings-modal__form",
+          "#settingsTeam0",
+          "102 team1"
+        );
+        await assertScrollerCanReach(
+          control,
+          ".settings-modal__form",
+          "#settingsTeam3",
+          "102 team4"
+        );
+        await assertScrollerCanReach(
+          control,
+          ".settings-modal__form",
+          "#settingsSaveBtn",
+          "102 save"
+        );
+        await control.evaluate(() => {
+          const input = document.getElementById("settingsTeam3");
+          input.focus();
+          input.value = "Edited4";
+        });
+        await control.evaluate(() => document.getElementById("settingsSaveBtn").click());
+        await control.waitForFunction(() => document.getElementById("settingsModal")?.hidden);
+        const names = await control.$$eval("#teamBoard .team-card__name", (els) =>
+          els.map((el) => el.textContent.trim())
+        );
+        assert(names.includes("Edited4"), `102 saved name ${names.join("|")}`);
+        results.push("102. 試合開始後の設定で全チーム名を編集・保存できる OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      // 12: キーボード想定のビューポート縮小でも入力欄操作可能
+      {
+        const setup = await openSetupPage(browser, {
+          viewport: { width: 360, height: 360 },
+        });
+        await setSetupTeamCount(setup, 4);
+        await assertScrollerCanReach(setup, ".setup__form", "#team4", "103 kb team4");
+        await setup.evaluate(() => {
+          const input = document.getElementById("team4");
+          input.focus();
+          input.value = "KB4";
+        });
+        assert(
+          await setup.evaluate(() => document.activeElement?.id === "team4"),
+          "103 focus team4"
+        );
+        await setup.close();
+
+        const control = await openControl(browser, ["A", "B", "C"], { room: nextRoom() });
+        await control.setViewport({
+          width: 360,
+          height: 360,
+          deviceScaleFactor: 2,
+          isMobile: true,
+          hasTouch: true,
+        });
+        await control.evaluate(() => document.querySelector(".header__settings").click());
+        await control.waitForSelector("#settingsModal:not([hidden])");
+        await assertScrollerCanReach(
+          control,
+          ".settings-modal__form",
+          "#settingsTeam2",
+          "103 settings team3"
+        );
+        await control.evaluate(() => {
+          document.getElementById("settingsTeam2").focus();
+          document.getElementById("settingsTeam2").value = "KB3";
+        });
+        assert(
+          await control.evaluate(() => document.activeElement?.id === "settingsTeam2"),
+          "103 settings focus"
+        );
+        results.push("103. キーボード想定の低viewportでも入力欄を操作できる OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      // 13-15: スコア入力・修正履歴回帰（設定修正で壊していないこと）
+      {
+        const control = await openControl(browser, ["A", "B", "C"], { room: nextRoom() });
+        await control.setViewport({
+          width: 375,
+          height: 667,
+          deviceScaleFactor: 2,
+          isMobile: true,
+          hasTouch: true,
+        });
+        await assertKeysOperable(control, ["1", "12", "0", "F"], "104 keypad");
+        await assertFooterActionsOperable(control, "104 footer");
+        await confirmKey(control, "0");
+        await confirmKey(control, "F");
+        await control.waitForFunction(
+          () => {
+            const log = window.SMAScoreSync.read()?.throwLog || [];
+            return log.some((e) => e.selection === 0) && log.some((e) => e.selection === "F");
+          },
+          { timeout: 10000 }
+        );
+        await control.evaluate(() => document.getElementById("editModeBtn").click());
+        await control.waitForSelector(".control--edit-mode");
+        const histOk = await control.evaluate(() => {
+          const body = document.querySelector(".control__body");
+          const scroll = document.getElementById("historyScroll");
+          return (
+            !!scroll &&
+            (getComputedStyle(body).overflowY === "hidden" ||
+              getComputedStyle(body).overflowY === "clip") &&
+            (getComputedStyle(scroll).overflowY === "auto" ||
+              getComputedStyle(scroll).overflowY === "scroll")
+          );
+        });
+        assert(histOk, "104 edit history scroll structure");
+        await control.evaluate(() => document.getElementById("editModeBtn").click());
+        results.push("104. 設定修正後もスコア入力・0/F・修正履歴スクロールが正常 OK");
+        console.log("…", results[results.length - 1]);
+        await control.close();
+      }
+
+      console.log("… 100-104 setup/settings team fields scroll OK");
     }
 
     console.log("\nBROWSER VERIFY RESULTS");

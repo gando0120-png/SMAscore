@@ -14,9 +14,38 @@
   let rematchMode = false;
 
   function setTeamFieldsVisibility(teamCount) {
+    const count = Number(teamCount) || 2;
     document.querySelectorAll(".team-field").forEach((field) => {
       const n = Number(field.className.match(/team-field--(\d+)/)?.[1] || 0);
-      field.style.display = n <= teamCount ? "" : "none";
+      // 明示的に flex/none を指定し、:has 非対応やインライン style の曖昧さを避ける
+      field.style.display = n > 0 && n <= count ? "flex" : "none";
+    });
+  }
+
+  function scrollFocusedFieldIntoView(target) {
+    if (!(target instanceof HTMLElement)) return;
+    if (!target.matches(".field__input, .settings-field__input, input, textarea")) return;
+    const scroller = form;
+    const run = () => {
+      try {
+        target.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      } catch {
+        target.scrollIntoView(true);
+      }
+      if (scroller) {
+        const rect = target.getBoundingClientRect();
+        const area = scroller.getBoundingClientRect();
+        if (rect.bottom > area.bottom - 12) {
+          scroller.scrollTop += rect.bottom - area.bottom + 24;
+        } else if (rect.top < area.top + 12) {
+          scroller.scrollTop -= area.top - rect.top + 24;
+        }
+      }
+    };
+    // ソフトウェアキーボード表示後の visualViewport 変化を待つ
+    requestAnimationFrame(() => {
+      run();
+      setTimeout(run, 280);
     });
   }
 
@@ -90,11 +119,16 @@
     }
   }
 
-  // チーム数変更で入力欄の表示を切り替え
+  // チーム数変更で入力欄の表示を切り替え（入力済みの名前は保持）
   form?.querySelectorAll('input[name="teams"]').forEach((input) => {
     input.addEventListener("change", () => {
       if (input.checked) setTeamFieldsVisibility(Number(input.value));
     });
+  });
+
+  // キーボード表示時も選択中の入力欄へ到達できるようにする
+  form?.addEventListener("focusin", (event) => {
+    scrollFocusedFieldIntoView(event.target);
   });
 
   const params = new URLSearchParams(window.location.search);

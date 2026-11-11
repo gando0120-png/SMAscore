@@ -1757,11 +1757,36 @@
       });
   }
 
+  function scrollSettingsFieldIntoView(target) {
+    if (!(target instanceof HTMLElement)) return;
+    if (!settingsForm || !target.matches("input, textarea, select")) return;
+    const run = () => {
+      try {
+        target.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
+      } catch {
+        target.scrollIntoView(true);
+      }
+      const rect = target.getBoundingClientRect();
+      const area = settingsForm.getBoundingClientRect();
+      if (rect.bottom > area.bottom - 12) {
+        settingsForm.scrollTop += rect.bottom - area.bottom + 24;
+      } else if (rect.top < area.top + 12) {
+        settingsForm.scrollTop -= area.top - rect.top + 24;
+      }
+    };
+    requestAnimationFrame(() => {
+      run();
+      setTimeout(run, 280);
+    });
+  }
+
   function openSettings() {
     settingsOpen = true;
     populateSettingsForm();
     settingsModal.hidden = false;
     controlEl.classList.add("control--settings-open");
+    // 開いた直後に先頭へ戻し、スクロール可能状態を確定する
+    if (settingsForm) settingsForm.scrollTop = 0;
     renderControls();
   }
 
@@ -2555,6 +2580,9 @@
   settingsCancelBtn.addEventListener("click", closeSettings);
   settingsBackdrop.addEventListener("click", closeSettings);
   settingsForm.addEventListener("submit", saveSettings);
+  settingsForm.addEventListener("focusin", (event) => {
+    scrollSettingsFieldIntoView(event.target);
+  });
   settingsNewMatchBtn.addEventListener("click", confirmNewMatch);
   settingsHistoryBtn?.addEventListener("click", openMatchHistoryModal);
   historyCloseBtn?.addEventListener("click", closeMatchHistoryModal);
